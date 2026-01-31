@@ -1,0 +1,172 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ master, main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ master, main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test and Build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --verbose
+
+      - name: Build release
+        run: cargo build --release --verbose
+
+      - name: Verify binary
+        run: |
+          if (!(Test-Path target/release/rustinel.exe)) {
+            Write-Error "Binary not found at target/release/rustinel.exe"
+            exit 1
+          }
+          $size = (Get-Item target/release/rustinel.exe).Length
+          $sizeMB = [math]::Round($size / 1MB, 2)
+          Write-Output "✓ Binary created successfully"
+          Write-Output "  Size: $sizeMB MB"
+          Write-Output "  Path: target/release/rustinel.exe"
+
+      - name: Upload release binary
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustinel-binary
+          path: target/release/rustinel.exe
+          retention-days: 1
+
+  release:
+    name: Create Release
+    runs-on: windows-latest
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rustinel-binary
+          path: target/release/
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "package_name=rustinel-$version-x86_64-pc-windows-msvc" >> $env:GITHUB_OUTPUT
+          Write-Output "Version: $version"
+          Write-Output "Package: rustinel-$version-x86_64-pc-windows-msvc"
+
+      - name: Create package structure
+        run: |
+          $pkg = "${{ steps.get_version.outputs.package_name }}"
+          Write-Output "Creating package structure: $pkg"
+
+          # Create main directory
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+
+          # Create subdirectories
+          New-Item -ItemType Directory -Force -Path $pkg/rules/sigma | Out-Null
+          New-Item -ItemType Directory -Force -Path $pkg/rules/yara | Out-Null
+          New-Item -ItemType Directory -Force -Path $pkg/logs | Out-Null
+
+          # Copy main files
+          Write-Output "Copying binary..."
+          Copy-Item target/release/rustinel.exe $pkg/
+
+          Write-Output "Copying config..."
+          Copy-Item config.toml $pkg/
+
+          Write-Output "Copying README..."
+          Copy-Item README.md $pkg/
+
+          # Copy example rules if they exist
+          $sigmaRules = Get-ChildItem -Path rules/sigma -Include *.yml,*.yaml -File -ErrorAction SilentlyContinue
+          if ($sigmaRules) {
+            Write-Output "Copying Sigma rules..."
+            Copy-Item $sigmaRules $pkg/rules/sigma/ -ErrorAction SilentlyContinue
+          } else {
+            Write-Output "No Sigma rules found, creating .gitkeep"
+            New-Item -ItemType File -Path $pkg/rules/sigma/.gitkeep -Force | Out-Null
+          }
+
+          $yaraRules = Get-ChildItem -Path rules/yara -Include *.yar,*.yara -File -ErrorAction SilentlyContinue
+          if ($yaraRules) {
+            Write-Output "Copying YARA rules..."
+            Copy-Item $yaraRules $pkg/rules/yara/ -ErrorAction SilentlyContinue
+          } else {
+            Write-Output "No YARA rules found, creating .gitkeep"
+            New-Item -ItemType File -Path $pkg/rules/yara/.gitkeep -Force | Out-Null
+          }
+
+          # Create .gitkeep for logs directory
+          New-Item -ItemType File -Path $pkg/logs/.gitkeep -Force | Out-Null
+
+          Write-Output "Package structure created successfully"
+
+      - name: Create ZIP archive
+        run: |
+          $pkg = "${{ steps.get_version.outputs.package_name }}"
+          Write-Output "Creating ZIP archive: $pkg.zip"
+          Compress-Archive -Path $pkg -DestinationPath "$pkg.zip" -Force
+
+          $size = (Get-Item "$pkg.zip").Length
+          $sizeMB = [math]::Round($size / 1MB, 2)
+          Write-Output "✓ ZIP created successfully"
+          Write-Output "  Size: $sizeMB MB"
+          Write-Output "  File: $pkg.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.get_version.outputs.package_name }}.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          name: Rustinel ${{ github.ref_name }}
+          body: |
+            ## Installation
+
+            1. Download `${{ steps.get_version.outputs.package_name }}.zip`
+            2. Extract to your desired location
+            3. Review and customize `config.toml`
+            4. Add Sigma rules to `rules/sigma/`
+            5. Add YARA rules to `rules/yara/`
+            6. Run as Administrator: `.\rustinel.exe run`
+
+            ## Requirements
+
+            - Windows 10/11 or Server 2016+ (x64)
+            - Administrator privileges (required for ETW access)
+            - Rust runtime NOT required (statically linked binary)
+
+            ## What's Changed
+
+            See auto-generated release notes below.

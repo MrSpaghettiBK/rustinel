@@ -1,0 +1,23 @@
+# Rustinel Configuration File
+# This file is optional - the agent will use defaults if not present
+
+# 1. Feature Toggles & Rules
+[scanner]
+sigma_enabled = true
+sigma_rules_path = "rules/sigma"
+yara_enabled = true
+yara_rules_path = "rules/yara"
+
+# 2. Operational Logging (The Agent's internal health)
+#    Writes to: {directory}/{filename}.YYYY-MM-DD
+[logging]
+level = "info"              # trace, debug, info, warn, error
+directory = "logs"
+filename = "rustinel.log"
+console_output = true       # If true, duplicate logs to stdout (dev mode)
+
+# 3. Security Alerts (The Detection Output)
+#    Writes to: {directory}/{filename}.YYYY-MM-DD
+[alerts]
+directory = "logs"
+filename = "alerts.json"    # Will contain newline-delimited JSON (NDJSON)

@@ -1,0 +1,73 @@
+[package]
+name = "rustinel"
+version = "0.1.0"
+edition = "2021"
+authors = []
+description = "High-performance, memory-safe Windows endpoint detection agent with ETW-based telemetry and Sigma rule engine"
+license = "Apache-2.0"
+rust-version = "1.92"
+default-run = "rustinel"
+
+[dependencies]
+# ETW provider
+ferrisetw = "1.2"
+
+# Sigma detection engine
+# Using regex for pattern matching in Sigma rules
+regex = "1.10"
+
+# Boolean expression evaluator for Sigma logic
+evalexpr = "11.3"
+
+# Network and encoding utilities for Sigma
+ipnetwork = "0.20"
+base64 = "0.22"
+
+# Yara scanning
+yara-x = "1.10"
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+chrono = { version = "0.4", features = ["clock"] }
+
+# Utilities
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tracing-appender = "0.2"
+clap = { version = "4.4", features = ["derive"] }
+
+# Configuration
+config = "0.14"
+
+# PE parsing and memory-mapped I/O
+pelite = "0.10"
+memmap2 = "0.9"
+
+# Windows-specific
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Etw",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
+    "Win32_Storage_FileSystem",
+] }
+windows-service = "0.7"
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+harness = true
