@@ -9,25 +9,9 @@
 
 Rustinel is a Windows-only, user-mode EDR agent built in Rust. It consumes ETW telemetry, normalizes events into a Sysmon-compatible schema, evaluates Sigma and YARA rules in real time, and writes ECS-style NDJSON alerts.
 
-Status: Alpha (v0.1.0)
-
-## Contents
-- Overview
-- Highlights
-- Architecture
-- Requirements
-- Quick Start
-- Build and Run
-- Service Mode
-- Configuration
-- Rules
-- Sigma Compatibility
-- Normalization and Event IDs
-- Telemetry Sources
-- Alert Output
-- Limitations
-- Roadmap
-- License
+<p align="center">
+  <img src="docs/images/demo.gif" alt="Rustinel Demo" width="800">
+</p>
 
 ## Overview
 Rustinel focuses on high-volume Windows telemetry without a kernel driver. It uses ETW providers for process, file, registry, network, and operational events, then normalizes and enriches those events for Sigma rules. Detections are emitted as ECS-style NDJSON for easy SIEM ingestion.
