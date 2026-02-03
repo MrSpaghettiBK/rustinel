@@ -44,3 +44,7 @@ cargo build --release
 # Run (requires Administrator)
 .\target\release\rustinel.exe run --console
 ```
+
+## Roadmap
+
+See the [Roadmap](roadmap.md) for planned capabilities and hardening work.
