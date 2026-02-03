@@ -1,6 +1,7 @@
 # Roadmap
 
 Short roadmap:
+
 - Active response engine (optional prevention mode, terminate on critical alerts).
 - YARA expansion (memory scanning + periodic scans).
 - Resource governor (Windows Job Objects CPU limits).
