@@ -655,13 +655,13 @@ async fn run_edr(
     let (app_guard, alert_guard, alert_sink) = init_logging(&cfg);
     let _guards = (app_guard, alert_guard);
 
-    // 2.1 Initialize Active Response Engine (optional)
-    let (response_engine, response_worker_handle) = ResponseEngine::new(&cfg.response);
-
     info!(target: "rustinel", "╔═══════════════════════════════════════════════════╗");
     info!(target: "rustinel", "║       Rustinel ETW Sentinel v0.1.0                ║");
     info!(target: "rustinel", "║   High-Performance Endpoint Detection Agent       ║");
     info!(target: "rustinel", "╚═══════════════════════════════════════════════════╝");
+
+    // 2.1 Initialize Active Response Engine (optional)
+    let (response_engine, response_worker_handle) = ResponseEngine::new(&cfg.response);
     info!(
         target: "rustinel",
         logs_dir = ?cfg.logging.directory,
