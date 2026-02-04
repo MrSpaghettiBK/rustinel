@@ -8,6 +8,7 @@ use crate::collector::EventHandler;
 use crate::engine::Engine;
 use crate::models::EventCategory;
 use crate::normalizer::Normalizer;
+use crate::response::ResponseEngine;
 use ferrisetw::EventRecord;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -23,6 +24,8 @@ pub struct SigmaDetectionHandler {
     pub engine: Arc<Engine>,
     /// ECS NDJSON alert sink
     pub alert_sink: AlertSink,
+    /// Active response engine
+    pub response_engine: ResponseEngine,
 }
 
 impl EventHandler for SigmaDetectionHandler {
@@ -62,6 +65,9 @@ impl EventHandler for SigmaDetectionHandler {
 
                     // 2. Security Alert (ECS NDJSON) - For SIEM ingestion
                     self.alert_sink.write_alert(&alert);
+
+                    // 3. Active Response (optional)
+                    self.response_engine.handle_alert(&alert);
                 } else {
                     // No match - moved to TRACE level (most verbose)
                     tracing::trace!(target: TARGET_ENGINE, "No Sigma rule matched this event");

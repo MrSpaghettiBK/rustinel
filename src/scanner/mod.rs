@@ -99,6 +99,24 @@ pub struct YaraEventHandler {
     pub tx: Sender<(String, u32)>, // Sends (FilePath, PID)
 }
 
+fn extract_process_id(parser: &Parser, record: &EventRecord) -> u32 {
+    // Kernel-Process ProcessStart events report the *parent* PID in the header.
+    // Prefer the payload ProcessID when present.
+    if let Ok(pid) = parser.try_parse::<u32>("ProcessID") {
+        return pid;
+    }
+    if let Ok(pid) = parser.try_parse::<u32>("ProcessId") {
+        return pid;
+    }
+    if let Ok(pid) = parser.try_parse::<u64>("ProcessID") {
+        return pid as u32;
+    }
+    if let Ok(pid) = parser.try_parse::<u64>("ProcessId") {
+        return pid as u32;
+    }
+    record.process_id()
+}
+
 impl EventHandler for YaraEventHandler {
     fn handle_event(&self, record: &EventRecord, category: EventCategory) {
         // We only care about Process Start (OpCode 1) events
@@ -116,7 +134,14 @@ impl EventHandler for YaraEventHandler {
 
                 // Try to get the ImageName (path)
                 if let Ok(nt_path) = parser.try_parse::<String>("ImageName") {
-                    let pid = record.process_id();
+                    let pid = extract_process_id(&parser, record);
+                    if pid != record.process_id() {
+                        debug!(
+                            "YARA: Payload PID {} differs from header PID {}",
+                            pid,
+                            record.process_id()
+                        );
+                    }
                     debug!("YARA: Got NT path: {} (PID: {})", nt_path, pid);
 
                     // Convert NT Device path to DOS path using shared mapper.

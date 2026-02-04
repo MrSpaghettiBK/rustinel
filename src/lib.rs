@@ -8,6 +8,7 @@ pub mod config;
 pub mod engine;
 pub mod models;
 pub mod normalizer;
+pub mod response;
 pub mod scanner;
 pub mod state;
 pub mod utils;

@@ -4,20 +4,30 @@ Rustinel uses two detection engines: Sigma for behavioral rules and YARA for fil
 
 ## Sigma Rules
 
-### Supported Categories
+### Logsource Categories (Required)
 
-| Category | Description |
-|----------|-------------|
-| `process_creation` | Process start events |
-| `network_connection` | TCP/UDP connections |
-| `file_event` | File create, delete, rename |
-| `registry_event` | Registry operations |
-| `dns_query` | DNS lookups |
-| `image_load` | DLL/module loading |
-| `ps_script` | PowerShell scripts |
-| `wmi_event` | WMI operations |
-| `service_creation` | Service installation |
-| `task_creation` | Scheduled tasks |
+Rustinel routes rules by `logsource.category`. The `product` and `service` fields
+are parsed but not used for routing. If `category` is missing, the rule is
+categorized as `unknown` and will not match events.
+
+Supported categories:
+
+- `process_creation`
+- `network_connection`
+- `file_event`
+- `file_create`
+- `file_delete`
+- `registry_event`
+- `registry_add`
+- `registry_set`
+- `registry_delete`
+- `dns_query`
+- `image_load`
+- `ps_script`
+- `wmi_event`
+- `service_creation`
+- `task_creation`
+- `pipe_created`
 
 ### Rule Format
 
@@ -28,7 +38,7 @@ logsource:
   category: process_creation
 detection:
   selection:
-    Image|endswith: '\suspicious.exe'
+    Image|endswith: '\\suspicious.exe'
   filter:
     User|contains: 'SYSTEM'
   condition: selection and not filter
@@ -41,51 +51,85 @@ level: high
 - Parentheses for grouping
 - Aggregation: `1 of selection*`, `all of them`
 
-### Modifiers
+### Supported Modifiers
 
-**String Matching:**
-- `contains` - Substring match
-- `startswith` - Prefix match
-- `endswith` - Suffix match
-- `all` - All values must match
-- `cased` - Case-sensitive
+| Modifier | Meaning |
+|----------|---------|
+| `contains` | Substring match |
+| `startswith` | Prefix match |
+| `endswith` | Suffix match |
+| `all` | All values must match |
+| `cased` | Case-sensitive match |
+| `re` | Regular expression |
+| `i`, `m`, `s` | Regex flags for `re` (case-insensitive, multiline, dotall) |
+| `windash` | Windows dash normalization (`-` and `/`) |
+| `fieldref` | Reference another field in the same event |
+| `exists` | Field presence check |
+| `cidr` | IP range matching |
+| `base64` | Base64-encoded matching |
+| `base64offset` | Base64 with offset variations |
+| `wide`, `utf16`, `utf16le`, `utf16be` | UTF-16 transformations |
+| `lt`, `gt`, `le`, `lte`, `ge`, `gte` | Numeric comparison |
 
-**Pattern Matching:**
-- `re` - Regular expression
-- `cidr` - IP range matching
+Wildcard characters `*` and `?` are supported in string patterns.
 
-**Encoding:**
-- `base64` - Base64 encoded
-- `base64offset` - Base64 with offset
-- `wide` / `utf16` - UTF-16 encoded
+### Common Fields
 
-**Comparison:**
-- `lt`, `gt`, `le`, `ge` - Numeric comparison
-- `exists` - Field presence check
-- `fieldref` - Reference another field
+Process events:
 
-**Other:**
-- `windash` - Windows dash normalization (`-` and `/`)
-
-### Available Fields
-
-**Process Events:**
 - `Image`, `CommandLine`, `User`, `ParentImage`, `ParentCommandLine`
 - `OriginalFileName`, `Product`, `Description`
-- `ProcessId`, `ParentProcessId`
+- `ProcessId`, `ParentProcessId`, `IntegrityLevel`, `CurrentDirectory`
+- `TargetImage`, `LogonId`, `LogonGuid`
 
-**Network Events:**
+Network events:
+
 - `DestinationIp`, `DestinationPort`, `SourceIp`, `SourcePort`
-- `DestinationHostname`
+- `DestinationHostname`, `Image`, `ProcessId`, `User`
 
-**File Events:**
-- `TargetFilename`, `Image`
+File events:
 
-**Registry Events:**
-- `TargetObject`, `Details`, `Image`
+- `TargetFilename`, `Image`, `ProcessId`, `User`
+- `CreationUtcTime`, `PreviousCreationUtcTime`
 
-**DNS Events:**
-- `QueryName`, `QueryResults`
+Registry events:
+
+- `TargetObject`, `Details`, `EventType`, `NewName`
+- `Image`, `ProcessId`, `User`
+
+DNS events:
+
+- `QueryName`, `QueryResults`, `QueryStatus`
+- `Image`, `ProcessId`
+
+Image load events:
+
+- `ImageLoaded`, `Image`, `OriginalFileName`, `Product`, `Description`
+- `Signed`, `Signature`, `User`, `ProcessId`
+
+PowerShell script events:
+
+- `ScriptBlockText`, `ScriptBlockId`, `Path`
+- `Image`, `ProcessId`, `User`
+
+WMI events:
+
+- `Operation`, `Query`, `EventNamespace`, `EventType`
+- `DestinationHostname`, `Image`, `ProcessId`, `User`
+
+Service creation events:
+
+- `ServiceName`, `ServiceFileName`, `ServiceType`, `StartType`, `AccountName`
+- `Image`, `ProcessId`, `User`
+
+Task creation events:
+
+- `TaskName`, `TaskContent`, `UserName`
+- `Image`, `ProcessId`, `User`
+
+Named pipe events:
+
+- `PipeName`, `EventType`, `Image`, `ProcessId`, `User`
 
 ## YARA Rules
 
@@ -111,22 +155,20 @@ rule ExampleDetection {
 - Rules loaded from `rules/yara/` at startup
 - Scans triggered on process creation events
 - File scanning runs in background (non-blocking)
-- Matches generate alerts with rule name
+- Matches generate alerts with the rule name
 
-### Supported File Types
+### Supported Rule Files
 
-Files are scanned by extension:
 - `.yar`
 - `.yara`
 
 ## Severity Levels
 
-Both engines map rule severity to alert levels:
+Sigma `level` values map to alert severity as follows:
 
-| Level | Description |
-|-------|-------------|
-| `informational` | Low-priority, FYI |
-| `low` | Minor concern |
-| `medium` | Moderate threat |
-| `high` | Significant threat |
-| `critical` | Immediate attention required |
+- `critical` -> Critical
+- `high` -> High
+- `medium` -> Medium
+- Any other value -> Low
+
+YARA matches are always treated as Critical.

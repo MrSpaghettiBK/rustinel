@@ -1,4 +1,3 @@
-
 # Development
 
 ## Building
@@ -9,15 +8,29 @@
 - Windows 10/11 or Server 2016+
 - Visual Studio Build Tools (for Windows API bindings)
 
+### Dev Run (Recommended)
+
+Requires Administrator privileges for ETW access.
+
+```powershell
+cargo run -- run --console
+```
+
+### Quick Syntax Check
+
+```powershell
+cargo check
+```
+
 ### Debug Build
 
-```bash
+```powershell
 cargo build
 ```
 
 ### Release Build
 
-```bash
+```powershell
 cargo build --release
 ```
 
@@ -27,26 +40,26 @@ Output: `target/release/rustinel.exe`
 
 ```
 src/
-├── main.rs           # Entry point, CLI, service management
-├── lib.rs            # Library interface
-├── config.rs         # Configuration loading
-├── alerts.rs         # Alert output sink
-├── collector/        # ETW event collection
-├── engine/           # Sigma detection engine
-├── models/           # Data structures
-├── normalizer/       # Event normalization
-├── scanner/          # YARA scanning
-├── state/            # Caching layer
-├── utils/            # Helper functions
-└── bin/
-    └── validate_rules.rs  # Rule validation tool
+??? main.rs           # Entry point, CLI, service management
+??? lib.rs            # Library interface
+??? config.rs         # Configuration loading
+??? alerts.rs         # Alert output sink
+??? collector/        # ETW event collection
+??? engine/           # Sigma detection engine
+??? models/           # Data structures
+??? normalizer/       # Event normalization
+??? scanner/          # YARA scanning
+??? state/            # Caching layer
+??? utils/            # Helper functions
+??? bin/
+    ??? validate_rules.rs  # Rule validation tool
 ```
 
 ## Testing
 
 ### Unit Tests
 
-```bash
+```powershell
 cargo test
 ```
 
@@ -54,7 +67,7 @@ cargo test
 
 Validate Sigma and YARA rules:
 
-```bash
+```powershell
 cargo run --bin validate_rules
 ```
 
@@ -66,7 +79,7 @@ This tool:
 
 ### Integration Tests
 
-```bash
+```powershell
 cargo test --test integration
 ```
 
@@ -74,13 +87,13 @@ cargo test --test integration
 
 Format code before committing:
 
-```bash
+```powershell
 cargo fmt
 ```
 
 Run linter:
 
-```bash
+```powershell
 cargo clippy
 ```
 
@@ -124,8 +137,8 @@ cargo clippy
 
 ### Verbose Logging
 
-```bash
-set EDR__LOGGING__LEVEL=trace
+```powershell
+$env:EDR__LOGGING__LEVEL="trace"
 rustinel run --console
 ```
 
@@ -133,7 +146,7 @@ rustinel run --console
 
 Use Windows Performance Analyzer or logman to trace ETW sessions:
 
-```bash
+```powershell
 logman query -ets
 ```
 

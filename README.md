@@ -60,6 +60,7 @@ Rustinel monitors Windows endpoints by:
   - DNS caching and reverse mapping
 - **Windows service support** (install/start/stop/uninstall)
 - **ECS NDJSON alerts** for SIEM ingestion
+- **Optional active response** (dry-run or terminate on critical alerts)
 
 ---
 
@@ -141,6 +142,8 @@ rustc .\examples\yara_demo.rs -o .\examples\yara_demo.exe
 
 * `ExampleMarkerString`
 
+**Note:** The demo binary runs in a loop to demonstrate active response. With response enabled and `prevention_enabled = true`, the process will be automatically terminated when the YARA rule triggers (YARA matches are treated as `critical` severity).
+
 ---
 
 ## Service mode
@@ -188,6 +191,18 @@ console_output = true
 directory = "logs"
 filename = "alerts.json"
 
+[response]
+enabled = false
+prevention_enabled = false
+min_severity = "critical"
+channel_capacity = 128
+allowlist_images = []
+allowlist_paths = [
+  "C:\\Windows\\",
+  "C:\\Program Files\\",
+  "C:\\Program Files (x86)\\",
+]
+
 [network]
 aggregation_enabled = true
 aggregation_max_entries = 20000
@@ -208,6 +223,19 @@ rustinel run --log-level debug
 ```
 
 Note: rule logic evaluation errors are only logged at `warn`, `debug`, or `trace` levels (suppressed at `info`).
+
+### Active response
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `false` | Enable active response engine |
+| `prevention_enabled` | `false` | If `false`, logs dry-run actions only |
+| `min_severity` | `critical` | Minimum severity to respond to (Sigma uses rule `level`, YARA is always treated as `critical`) |
+| `channel_capacity` | `128` | Queue size for response tasks (drops on overflow) |
+| `allowlist_images` | `[]` | Image basenames or full paths to skip |
+| `allowlist_paths` | `["C:\\Windows\\", ...]` | Prefix paths to skip (case-insensitive) |
+
+More details: `docs/active-response.md`.
 
 ---
 
@@ -254,19 +282,6 @@ Example alert (one JSON object per line):
 
 ---
 
-## Documentation
-
-* 📚 Docs home: [https://karib0u.github.io/rustinel/](https://karib0u.github.io/rustinel/)
-* Getting Started: [https://karib0u.github.io/rustinel/getting-started/](https://karib0u.github.io/rustinel/getting-started/)
-* Configuration: [https://karib0u.github.io/rustinel/configuration/](https://karib0u.github.io/rustinel/configuration/)
-* CLI Reference: [https://karib0u.github.io/rustinel/cli/](https://karib0u.github.io/rustinel/cli/)
-* Architecture: [https://karib0u.github.io/rustinel/architecture/](https://karib0u.github.io/rustinel/architecture/)
-* Detection: [https://karib0u.github.io/rustinel/detection/](https://karib0u.github.io/rustinel/detection/)
-* Output Format: [https://karib0u.github.io/rustinel/output/](https://karib0u.github.io/rustinel/output/)
-* Development: [https://karib0u.github.io/rustinel/development/](https://karib0u.github.io/rustinel/development/)
-
----
-
 ## Development
 
 ```powershell
@@ -298,15 +313,12 @@ src/
 ## Roadmap
 
 Short roadmap:
-- Active response engine (optional prevention mode, terminate on critical alerts).
 - YARA expansion (memory scanning + periodic scans).
 - Resource governor (Windows Job Objects CPU limits).
 - Self-defense hardening (DACL/ACL restrictions + anti-injection).
 - Watchdog sidecar to restart the service if the main process dies.
 - ETW integrity checks to detect blinding/tampering.
 - Deep inspection via stack tracing for "floating code".
-
-Full details: [docs/roadmap.md](docs/roadmap.md).
 
 ---
 

@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub scanner: ScannerConfig,
     pub logging: LogConfig,
     pub alerts: AlertConfig,
+    pub response: ResponseConfig,
     pub network: NetworkConfig,
 }
 
@@ -45,6 +46,17 @@ pub struct LogConfig {
 pub struct AlertConfig {
     pub directory: PathBuf,
     pub filename: String,
+}
+
+/// Active response configuration (optional prevention/termination)
+#[derive(Debug, Deserialize)]
+pub struct ResponseConfig {
+    pub enabled: bool,
+    pub prevention_enabled: bool,
+    pub min_severity: String,
+    pub channel_capacity: usize,
+    pub allowlist_images: Vec<String>,
+    pub allowlist_paths: Vec<String>,
 }
 
 /// Network event aggregation configuration
@@ -76,6 +88,20 @@ impl AppConfig {
             // Alerts
             .set_default("alerts.directory", "logs")?
             .set_default("alerts.filename", "alerts.json")?
+            // Active Response
+            .set_default("response.enabled", false)?
+            .set_default("response.prevention_enabled", false)?
+            .set_default("response.min_severity", "critical")?
+            .set_default("response.channel_capacity", 128)?
+            .set_default("response.allowlist_images", Vec::<String>::new())?
+            .set_default(
+                "response.allowlist_paths",
+                vec![
+                    "C:\\Windows\\".to_string(),
+                    "C:\\Program Files\\".to_string(),
+                    "C:\\Program Files (x86)\\".to_string(),
+                ],
+            )?
             // Network
             .set_default("network.aggregation_enabled", true)?
             .set_default("network.aggregation_max_entries", 20000)?
@@ -108,6 +134,18 @@ impl Default for AppConfig {
                 directory: PathBuf::from("logs"),
                 filename: "alerts.json".to_string(),
             },
+            response: ResponseConfig {
+                enabled: false,
+                prevention_enabled: false,
+                min_severity: "critical".to_string(),
+                channel_capacity: 128,
+                allowlist_images: Vec::new(),
+                allowlist_paths: vec![
+                    "C:\\Windows\\".to_string(),
+                    "C:\\Program Files\\".to_string(),
+                    "C:\\Program Files (x86)\\".to_string(),
+                ],
+            },
             network: NetworkConfig {
                 aggregation_enabled: true,
                 aggregation_max_entries: 20_000,
@@ -127,6 +165,9 @@ mod tests {
         assert!(cfg.scanner.sigma_enabled);
         assert_eq!(cfg.logging.level, "info");
         assert!(cfg.logging.console_output);
+        assert!(!cfg.response.enabled);
+        assert!(!cfg.response.prevention_enabled);
+        assert_eq!(cfg.response.min_severity, "critical");
     }
 
     #[test]

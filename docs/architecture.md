@@ -68,17 +68,23 @@ Converts raw ETW events to Sigma-compatible format.
 - DNS IP → hostname mapping
 
 **Event ID Mapping:**
-| ETW Event | Sysmon ID |
-|-----------|-----------|
+| ETW Event | Sysmon or Windows ID |
+|-----------|----------------------|
 | Process Start | 1 |
 | Process Stop | 5 |
 | Image Load | 7 |
 | File Create | 11 |
 | File Delete | 23 |
-| Registry Create | 12 |
+| Registry Create/Delete | 12 |
 | Registry SetValue | 13 |
-| Network Connect | 3 |
+| Network Connect (TCP/UDP) | 3 |
 | DNS Query | 22 |
+| WMI Event | 19 |
+| PowerShell Script Block | 4104 |
+| Service Creation | 7045 |
+| Task Creation | 106 |
+| Pipe Created | 17 |
+| Pipe Connected | 18 |
 
 ### State Caches
 
@@ -93,7 +99,7 @@ Thread-safe caches for performance:
 
 **Sigma Engine:**
 - Parses YAML rules with boolean logic
-- Supports 15+ modifiers (contains, regex, base64, etc.)
+- Supports core Sigma modifiers like `contains`, `re`, `cidr`, `base64`, `fieldref`, `windash`
 - Evaluates in real-time per event
 
 **YARA Scanner:**

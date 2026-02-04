@@ -1,50 +1,36 @@
-# Rustinel
+# Rustinel Documentation
 
-A high-performance Windows EDR agent written in Rust.
+Rustinel is a high-performance, user-mode Windows EDR agent written in Rust. It collects
+kernel telemetry via ETW, normalizes to Sysmon-style fields, runs Sigma and YARA, and
+writes ECS NDJSON alerts.
 
-## What It Does
+## Start Here
 
-Rustinel monitors Windows endpoints by:
+- [Getting Started](getting-started.md)
+- [Configuration](configuration.md)
+- [CLI Reference](cli.md)
 
-- Collecting kernel events via ETW (Event Tracing for Windows)
-- Normalizing events to Sysmon-compatible format
-- Detecting threats using Sigma rules and YARA scanning
-- Outputting alerts in ECS NDJSON format for SIEM ingestion
+## Guides
 
-## Key Features
+- [Detection (Sigma + YARA)](detection.md)
+- [Active Response](active-response.md)
+- [Output Format](output.md)
 
-- **Dual Detection Engines** - Sigma rules for behavioral detection, YARA for file scanning
-- **User-Mode** - No kernel driver required
-- **Memory-Safe** - Pure Rust implementation
-- **High Performance** - Async event handling, intelligent caching
-- **Windows Service** - Runs as a background service with auto-start
+## Reference
 
-## Requirements
+- [Architecture](architecture.md)
+- [Development](development.md)
+- [Roadmap](roadmap.md)
 
-- Windows 10/11 or Server 2016+
-- Administrator privileges
-- Rust 1.92+ (to build from source)
+## Quick Start (60 seconds)
 
-## Quick Start
+1. Download the latest release from GitHub Releases.
+2. Open an elevated PowerShell in the extracted folder.
+3. Run `.\rustinel.exe run --console`.
+4. Verify output in `logs/rustinel.log.YYYY-MM-DD` and `logs/alerts.json.YYYY-MM-DD`.
 
-**Download & Run (No install required):**
+## Notes
 
-1. Get the latest release from [GitHub Releases](https://github.com/Karib0u/rustinel/releases).
-2. Run as Administrator:
-   ```powershell
-   .\rustinel.exe run --console
-   ```
-
-**Or Build from Source:**
-
-```bash
-# Build
-cargo build --release
-
-# Run (requires Administrator)
-.\target\release\rustinel.exe run --console
-```
-
-## Roadmap
-
-See the [Roadmap](roadmap.md) for planned capabilities and hardening work.
+- Windows only. Administrator privileges are required for ETW.
+- Configuration and rules are resolved from the current working directory. For service mode, use absolute paths or environment overrides.
+- Service mode is supported on Windows. See the CLI Reference for commands.

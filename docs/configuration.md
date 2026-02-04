@@ -1,15 +1,21 @@
 # Configuration
 
-Rustinel loads configuration from four sources (in order of precedence):
+Rustinel loads configuration from four sources in order of precedence:
 
 1. CLI flags (highest, run mode only)
 2. Environment variables
-3. `config.toml` file
+3. `config.toml` in the current working directory
 4. Built-in defaults (lowest)
 
 ## Configuration File
 
-Create `config.toml` in the same directory as the executable:
+Place `config.toml` in the current working directory when you start Rustinel. The
+file name is resolved as `config` by the config loader, so `config.toml` is the
+recommended format.
+
+For service deployments, the working directory is the service process directory
+(often `C:\Windows\System32`). Use absolute paths or environment overrides for
+rules and log locations.
 
 ```toml
 [scanner]
@@ -28,6 +34,18 @@ console_output = true
 directory = "logs"
 filename = "alerts.json"
 
+[response]
+enabled = false
+prevention_enabled = false
+min_severity = "critical"
+channel_capacity = 128
+allowlist_images = []
+allowlist_paths = [
+  "C:\\Windows\\",
+  "C:\\Program Files\\",
+  "C:\\Program Files (x86)\\",
+]
+
 [network]
 aggregation_enabled = true
 aggregation_max_entries = 20000
@@ -41,9 +59,9 @@ aggregation_interval_buffer_size = 50
 | Option | Default | Description |
 |--------|---------|-------------|
 | `sigma_enabled` | `true` | Enable Sigma rule engine |
-| `sigma_rules_path` | `rules/sigma` | Path to Sigma rules directory |
+| `sigma_rules_path` | `rules/sigma` | Path to Sigma rules directory (relative to working directory unless absolute) |
 | `yara_enabled` | `true` | Enable YARA scanner |
-| `yara_rules_path` | `rules/yara` | Path to YARA rules directory |
+| `yara_rules_path` | `rules/yara` | Path to YARA rules directory (relative to working directory unless absolute) |
 
 ### Logging
 
@@ -63,6 +81,19 @@ Rule logic evaluation errors from Sigma are only emitted at `warn`, `debug`, or 
 | `directory` | `logs` | Alert output directory |
 | `filename` | `alerts.json` | Alert filename (NDJSON, daily rotation) |
 
+### Active Response
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `false` | Enable active response engine |
+| `prevention_enabled` | `false` | If `false`, log dry-run actions only |
+| `min_severity` | `critical` | Minimum severity to respond to: `low`, `medium`, `high`, `critical` |
+| `channel_capacity` | `128` | Queue size for response tasks (drops on overflow) |
+| `allowlist_images` | `[]` | Image basenames or full paths to skip |
+| `allowlist_paths` | `[...]` | Prefix paths to skip (case-insensitive) |
+
+See `docs/active-response.md` for behavior and testing guidance.
+
 ### Network
 
 | Option | Default | Description |
@@ -71,28 +102,26 @@ Rule logic evaluation errors from Sigma are only emitted at `warn`, `debug`, or 
 | `aggregation_max_entries` | `20000` | Maximum unique connections to track |
 | `aggregation_interval_buffer_size` | `50` | Intervals to store for beacon detection |
 
-Connection aggregation suppresses repeated connections from the same process to the same destination, emitting only the first connection. This significantly reduces event volume while preserving detection capability. Timing data is collected for future beacon detection analysis.
+Connection aggregation suppresses repeated connections from the same process to the same destination,
+emitting only the first connection. Timing data is collected for future beacon detection analysis.
 
 ## Environment Variables
 
-Override any setting using `EDR__` prefix with double underscore separators:
+Override any setting using the `EDR__` prefix with double underscore separators:
 
-```bash
-# Set log level to debug
-set EDR__LOGGING__LEVEL=debug
+```powershell
+$env:EDR__LOGGING__LEVEL="debug"
+$env:EDR__SCANNER__SIGMA_RULES_PATH="C:\\custom\\sigma"
+$env:EDR__SCANNER__YARA_RULES_PATH="C:\\custom\\yara"
 
-# Custom rules path
-set EDR__SCANNER__SIGMA_RULES_PATH=C:\custom\sigma
-
-# Run
-rustinel.exe
+rustinel run
 ```
 
 ## CLI Overrides
 
 Only the log level can be overridden via CLI:
 
-```bash
+```powershell
 rustinel run --log-level debug
 ```
 

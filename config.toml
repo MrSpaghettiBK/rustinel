@@ -21,3 +21,29 @@ console_output = true       # If true, duplicate logs to stdout (dev mode)
 [alerts]
 directory = "logs"
 filename = "alerts.json"    # Will contain newline-delimited JSON (NDJSON)
+
+# 4. Active Response (Optional Prevention)
+[response]
+enabled = false
+prevention_enabled = false
+min_severity = "critical"   # sigma: critical only; yara always treated as critical
+channel_capacity = 128
+allowlist_images = [
+  "system",
+  "smss.exe",
+  "csrss.exe",
+  "wininit.exe",
+  "winlogon.exe",
+  "services.exe",
+  "lsass.exe",
+  "svchost.exe",
+  "explorer.exe",
+  "dwm.exe",
+  "fontdrvhost.exe",
+  "sihost.exe"
+]
+allowlist_paths = [
+  "C:\\Windows\\",
+  "C:\\Program Files\\",
+  "C:\\Program Files (x86)\\"
+]

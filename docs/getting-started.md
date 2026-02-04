@@ -1,103 +1,55 @@
 # Getting Started
 
-## Installation
+This guide gets Rustinel running and verifies it is producing alerts.
 
-### Download Release (Recommended)
+## Requirements
 
-You can download pre-built binaries for Windows from the [Releases page](https://github.com/Karib0u/rustinel/releases).
+- Windows 10/11 or Server 2016+
+- Administrator privileges
+- Rust 1.92+ and Visual Studio Build Tools if building from source
 
-1. Download the latest `.zip` file.
-2. Extract it to your desired location (e.g., `C:\Program Files\Rustinel`).
-3. Open an Administrator PowerShell prompt in that directory.
+## Option 1: Download Release (Recommended)
 
-### From Source
+1. Download the latest release from GitHub Releases.
+2. Extract the archive to a folder such as `C:\Rustinel`.
+3. Open an elevated PowerShell in that folder.
+4. Run `.\rustinel.exe run --console`.
 
-```bash
+## Option 2: Build from Source
+
+```powershell
 git clone https://github.com/Karib0u/rustinel.git
 cd rustinel
+cargo run -- run --console
+```
+
+For an optimized binary:
+
+```powershell
 cargo build --release
+.\target\release\rustinel.exe run --console
 ```
 
-The binary is located at `target/release/rustinel.exe`.
+## Verify Operation
 
-### Directory Structure
+1. Confirm the log file exists: `logs\rustinel.log.YYYY-MM-DD`.
+2. Trigger a Sigma example by running `whoami /all`.
+3. Confirm an alert exists in `logs\alerts.json.YYYY-MM-DD`.
 
-```
-rustinel/
-├── rustinel.exe
-├── config.toml         # Optional configuration
-├── rules/
-│   ├── sigma/          # Sigma detection rules
-│   └── yara/           # YARA scanning rules
-└── logs/               # Created at runtime
-    ├── rustinel.log.*  # Operational logs
-    └── alerts.json.*   # Security alerts
-```
+## Run as a Service (Optional)
 
-## Running
+Service commands must be run from the final install directory. The service uses
+its working directory to resolve `config.toml` and relative rule paths, so prefer
+absolute paths in configuration for service deployments.
 
-### Console Mode
-
-Run directly in the terminal with logs displayed:
-
-```bash
-.\rustinel.exe run --console
-```
-
-Press `Ctrl+C` to stop.
-
-### Windows Service
-
-Install and run as a background service:
-
-```bash
-# Install (runs at startup)
+```powershell
 .\rustinel.exe service install
-
-# Start
 .\rustinel.exe service start
-
-# Stop
 .\rustinel.exe service stop
-
-# Uninstall
 .\rustinel.exe service uninstall
 ```
 
-## Adding Rules
+## Troubleshooting
 
-### Sigma Rules
-
-Place `.yml` files in `rules/sigma/`:
-
-```yaml
-title: Whoami Execution
-logsource:
-  category: process_creation
-detection:
-  selection:
-    Image|endswith: '\whoami.exe'
-  condition: selection
-level: low
-```
-
-### YARA Rules
-
-Place `.yar` or `.yara` files in `rules/yara/`:
-
-```yara
-rule SuspiciousString {
-  strings:
-    $s = "malicious" nocase
-  condition:
-    $s
-}
-```
-
-## Verifying Operation
-
-Check that Rustinel is working:
-
-1. Look for `logs/rustinel.log.*` for operational logs
-2. Trigger a test detection (e.g., run `whoami.exe`)
-3. Check `logs/alerts.json.*` for generated alerts
+- If you see an Administrator privilege error, reopen PowerShell as Administrator.
+- If no alerts are produced, confirm rules exist under `rules\sigma` or `rules\yara`.

@@ -3,14 +3,12 @@
 ## Usage
 
 ```
-rustinel [COMMAND]
+rustinel [COMMAND] [OPTIONS]
 ```
 
 ## Global Options
 
-These flags apply to `run` only.
-
-- `--log-level <LEVEL>` - Override logging level for this run (`trace`, `debug`, `info`, `warn`, `error`)
+- `--log-level <LEVEL>` - Override logging level for this run (`trace`, `debug`, `info`, `warn`, `error`). This is applied only to `run` and is ignored by service commands.
 
 ## Commands
 
@@ -18,22 +16,18 @@ These flags apply to `run` only.
 
 Run in console mode with visible output.
 
-```bash
-rustinel run [OPTIONS]
+```
+rustinel run [--console] [--log-level <LEVEL>]
 ```
 
 **Options:**
 - `--console` - Force console output regardless of config
 
 **Examples:**
-```bash
-# Basic run
+
+```powershell
 rustinel run
-
-# With forced console output
 rustinel run --console
-
-# Override log level
 rustinel run --log-level debug
 ```
 
@@ -41,22 +35,15 @@ rustinel run --log-level debug
 
 Manage Windows service installation and lifecycle.
 
-```bash
-rustinel service <SUBCOMMAND>
+```
+rustinel service <install|uninstall|start|stop>
 ```
 
-**Subcommands:**
-
-| Command | Description |
-|---------|-------------|
-| `install` | Register as Windows service (auto-start enabled) |
-| `uninstall` | Remove service registration |
-| `start` | Start the service |
-| `stop` | Stop the service |
+Service commands require an elevated PowerShell.
 
 **Examples:**
-```bash
-# Full service lifecycle
+
+```powershell
 rustinel service install
 rustinel service start
 rustinel service stop
@@ -74,20 +61,20 @@ Running `rustinel` without arguments is equivalent to `rustinel run`.
 | 0 | Success |
 | 1 | Error (check logs for details) |
 
-## Requirements
-
-- Must run as Administrator
-- For service commands, requires elevated command prompt
-
 ## Environment Variables
 
-Configuration can be overridden via environment:
+Configuration can be overridden via environment variables using the `EDR__` prefix and double underscore separators.
 
-```bash
-# Set before running
-set EDR__LOGGING__LEVEL=debug
-set EDR__SCANNER__SIGMA_ENABLED=true
+```powershell
+$env:EDR__LOGGING__LEVEL="debug"
+$env:EDR__SCANNER__SIGMA_ENABLED="true"
 rustinel run
+```
+
+To clear a variable for the current shell:
+
+```powershell
+Remove-Item Env:EDR__LOGGING__LEVEL
 ```
 
 See [Configuration](configuration.md) for all available options.

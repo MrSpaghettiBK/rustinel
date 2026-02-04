@@ -9,6 +9,7 @@ mod config;
 mod engine;
 mod models;
 mod normalizer;
+mod response;
 mod scanner;
 mod state;
 mod utils;
@@ -24,6 +25,7 @@ use models::{
     ProcessCreationFields,
 };
 use normalizer::Normalizer;
+use response::ResponseEngine;
 use scanner::YaraEventHandler;
 use state::{ConnectionAggregator, DnsCache, ProcessCache, SidCache};
 use std::path::Path;
@@ -653,6 +655,9 @@ async fn run_edr(
     let (app_guard, alert_guard, alert_sink) = init_logging(&cfg);
     let _guards = (app_guard, alert_guard);
 
+    // 2.1 Initialize Active Response Engine (optional)
+    let (response_engine, response_worker_handle) = ResponseEngine::new(&cfg.response);
+
     info!(target: "rustinel", "╔═══════════════════════════════════════════════════╗");
     info!(target: "rustinel", "║       Rustinel ETW Sentinel v0.1.0                ║");
     info!(target: "rustinel", "║   High-Performance Endpoint Detection Agent       ║");
@@ -805,6 +810,7 @@ async fn run_edr(
     // Spawn the background worker task for YARA scanning
     let scanner_clone = Arc::clone(&yara_scanner);
     let alert_sink_for_yara = alert_sink.clone();
+    let response_engine_for_yara = response_engine.clone();
     let yara_worker_handle = tokio::spawn(async move {
         info!("YARA Worker thread started and waiting for files to scan");
         while let Some((path, pid)) = rx.recv().await {
@@ -828,6 +834,7 @@ async fn run_edr(
                         for rule in &matches {
                             let alert = build_yara_alert(rule, &path, pid);
                             alert_sink_for_yara.write_alert(&alert);
+                            response_engine_for_yara.handle_alert(&alert);
                         }
                     } else {
                         debug!("YARA Worker: No matches for {}", path);
@@ -858,6 +865,7 @@ async fn run_edr(
         normalizer: Arc::clone(&normalizer),
         engine: Arc::clone(&sigma_engine),
         alert_sink: alert_sink.clone(),
+        response_engine: response_engine.clone(),
     };
 
     // Create YARA event handler
@@ -923,11 +931,18 @@ async fn run_edr(
             // Shutdown YARA worker: Drop the router (which holds tx sender)
             // This causes rx.recv() to return None, breaking the worker loop
             drop(router);
+            drop(response_engine);
             info!("Signaling YARA worker to shut down...");
 
             match yara_worker_handle.await {
                 Ok(_) => info!("YARA worker thread finished"),
                 Err(e) => error!("Failed to join YARA worker thread: {}", e),
+            }
+
+            info!("Signaling response worker to shut down...");
+            match response_worker_handle.await {
+                Ok(_) => info!("Response worker thread finished"),
+                Err(e) => error!("Failed to join response worker thread: {}", e),
             }
         }
         // CRITICAL: If trace finishes unexpectedly, the collector died!
@@ -939,10 +954,17 @@ async fn run_edr(
 
                 // Shutdown YARA worker even in this path
                 drop(router);
+                drop(response_engine);
                 info!("Signaling YARA worker to shut down...");
                 match yara_worker_handle.await {
                     Ok(_) => info!("YARA worker thread finished"),
                     Err(e) => error!("Failed to join YARA worker thread: {}", e),
+                }
+
+                info!("Signaling response worker to shut down...");
+                match response_worker_handle.await {
+                    Ok(_) => info!("Response worker thread finished"),
+                    Err(e) => error!("Failed to join response worker thread: {}", e),
                 }
             } else {
                 error!("🚨 CRITICAL: ETW Collector thread died unexpectedly!");
