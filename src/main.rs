@@ -7,6 +7,7 @@ mod alerts;
 mod collector;
 mod config;
 mod engine;
+mod ioc;
 mod models;
 mod normalizer;
 mod response;
@@ -16,13 +17,13 @@ mod utils;
 
 use alerts::AlertSink;
 use anyhow::{Context, Result};
-use chrono::{SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
 use collector::{Collector, EventRouter};
 use engine::{Engine, SigmaDetectionHandler};
+use ioc::{HashCache, IocEngine};
 use models::{
-    Alert, AlertSeverity, DetectionEngine, EventCategory, EventFields, NormalizedEvent,
-    ProcessCreationFields,
+    Alert, AlertSeverity, DetectionEngine, EventCategory, EventFields, MatchDebugLevel,
+    MatchDetails, NormalizedEvent, ProcessCreationFields, YaraMatchDetails, YaraRuleMatch,
 };
 use normalizer::Normalizer;
 use response::ResponseEngine;
@@ -30,11 +31,13 @@ use scanner::YaraEventHandler;
 use state::{ConnectionAggregator, DnsCache, ProcessCache, SidCache};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Builder;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
 use tracing_appender::rolling;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use utils::LogRateLimiter;
 
 #[cfg(windows)]
 const SERVICE_NAME: &str = "Rustinel";
@@ -42,6 +45,7 @@ const SERVICE_NAME: &str = "Rustinel";
 const SERVICE_DISPLAY_NAME: &str = "Rustinel ETW Sentinel";
 #[cfg(windows)]
 const SERVICE_DESCRIPTION: &str = "High-performance endpoint detection agent";
+const WORKER_DEBUG_LOG_WINDOW_SECS: u64 = 30;
 
 #[derive(Parser)]
 #[command(name = "rustinel")]
@@ -289,6 +293,34 @@ fn service_main() -> Result<()> {
 
 /// Initialize dual-pipeline logging system
 /// Returns WorkerGuards that MUST be kept alive for the duration of the program
+fn build_log_filter(logging: &config::LogConfig) -> EnvFilter {
+    if let Some(raw_filter) = logging.filter.as_deref() {
+        let filter = raw_filter.trim();
+        if !filter.is_empty() {
+            match EnvFilter::try_new(filter) {
+                Ok(parsed) => return parsed,
+                Err(err) => {
+                    eprintln!(
+                        "Invalid logging.filter '{}': {}. Falling back to logging.level '{}'",
+                        filter, err, logging.level
+                    );
+                }
+            }
+        }
+    }
+
+    match EnvFilter::try_new(logging.level.trim()) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            eprintln!(
+                "Invalid logging.level '{}': {}. Falling back to 'info'",
+                logging.level, err
+            );
+            EnvFilter::try_new("info").expect("hardcoded 'info' filter should always parse")
+        }
+    }
+}
+
 fn init_logging(
     cfg: &config::AppConfig,
 ) -> (
@@ -313,13 +345,14 @@ fn init_logging(
     // 1. Operational Logs (Human Readable Text)
     let app_file = rolling::daily(&cfg.logging.directory, &cfg.logging.filename);
     let (app_writer, app_guard) = tracing_appender::non_blocking(app_file);
+    let base_filter = build_log_filter(&cfg.logging);
 
     let app_layer = fmt::layer()
         .with_writer(app_writer)
         .compact()
         .with_ansi(false)
         .with_target(true)
-        .with_filter(EnvFilter::new(&cfg.logging.level)); // Respect configured log level
+        .with_filter(base_filter.clone()); // Respect configured filter/level
 
     // 2. Security Alerts (ECS NDJSON)
     let alert_file = rolling::daily(&cfg.alerts.directory, &cfg.alerts.filename);
@@ -332,7 +365,7 @@ fn init_logging(
             fmt::layer()
                 .compact()
                 .with_target(false) // Hide target for cleaner output
-                .with_filter(EnvFilter::new(&cfg.logging.level)),
+                .with_filter(base_filter),
         )
     } else {
         None
@@ -564,17 +597,59 @@ fn snapshot_processes(cache: &ProcessCache) -> Result<usize> {
     Ok(count)
 }
 
-fn now_timestamp_string() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+fn build_yara_match_details(
+    match_debug: MatchDebugLevel,
+    rule_match: &YaraRuleMatch,
+) -> Option<MatchDetails> {
+    if matches!(match_debug, MatchDebugLevel::Off) {
+        return None;
+    }
+
+    let summary = if matches!(match_debug, MatchDebugLevel::Full) {
+        if let Some(first_string) = rule_match.strings.first() {
+            if let Some(offset) = first_string.offset {
+                format!(
+                    "matched YARA rule {} via {} at 0x{:x}",
+                    rule_match.rule, first_string.id, offset
+                )
+            } else {
+                format!(
+                    "matched YARA rule {} via {}",
+                    rule_match.rule, first_string.id
+                )
+            }
+        } else {
+            format!("matched YARA rule {}", rule_match.rule)
+        }
+    } else {
+        format!("matched YARA rule {}", rule_match.rule)
+    };
+
+    let mut rule = rule_match.clone();
+    if !matches!(match_debug, MatchDebugLevel::Full) {
+        rule.strings.clear();
+    }
+
+    Some(MatchDetails {
+        summary,
+        sigma: None,
+        yara: Some(YaraMatchDetails { rules: vec![rule] }),
+    })
 }
 
-fn build_yara_alert(rule_name: &str, path: &str, pid: u32) -> Alert {
+fn build_yara_alert(
+    rule_name: &str,
+    path: &str,
+    pid: u32,
+    match_details: Option<MatchDetails>,
+) -> Alert {
     Alert {
         severity: AlertSeverity::Critical,
         rule_name: rule_name.to_string(),
+        rule_description: None,
         engine: DetectionEngine::Yara,
         event: NormalizedEvent {
-            timestamp: now_timestamp_string(),
+            timestamp: utils::now_timestamp_string(),
             category: EventCategory::Process,
             event_id: 1,
             event_id_string: "1".to_string(),
@@ -598,6 +673,7 @@ fn build_yara_alert(rule_name: &str, path: &str, pid: u32) -> Alert {
             }),
             process_context: None,
         },
+        match_details,
     }
 }
 
@@ -747,7 +823,8 @@ async fn run_edr(
     let collector = Arc::new(Collector::new());
 
     // Initialize Sigma engine
-    let mut sigma_engine = Engine::new_with_logging_level(&cfg.logging.level);
+    let mut sigma_engine =
+        Engine::new_with_logging_level_and_match_debug(&cfg.logging.level, cfg.alerts.match_debug);
 
     if cfg.scanner.sigma_enabled {
         info!(
@@ -763,6 +840,9 @@ async fn run_edr(
             info!(
                 target: "rustinel",
                 total_rules = stats.total_rules,
+                skipped_category_rules = stats.skipped_category_rules,
+                skipped_product_rules = stats.skipped_product_rules,
+                skipped_service_rules = stats.skipped_service_rules,
                 "Sigma Engine initialized"
             );
             for (category, count) in stats.rules_by_category {
@@ -803,50 +883,228 @@ async fn run_edr(
         )
     };
 
+    let yara_allowlist_paths =
+        scanner::normalize_allowlist_paths(&cfg.scanner.yara_allowlist_paths);
+    if !yara_allowlist_paths.is_empty() {
+        info!(
+            target: "rustinel",
+            count = yara_allowlist_paths.len(),
+            "YARA allowlist paths loaded (files under these paths will NOT be scanned)"
+        );
+    }
+
     // Create background worker channel for YARA scanning
     // Buffer = 1000 items. If 1000 processes start instantly, we drop events rather than blocking.
     let (tx, mut rx) = mpsc::channel::<(String, u32)>(1000);
 
     // Spawn the background worker task for YARA scanning
     let scanner_clone = Arc::clone(&yara_scanner);
+    let yara_allowlist_paths_for_worker = yara_allowlist_paths.clone();
     let alert_sink_for_yara = alert_sink.clone();
     let response_engine_for_yara = response_engine.clone();
-    let yara_worker_handle = tokio::spawn(async move {
-        info!("YARA Worker thread started and waiting for files to scan");
-        while let Some((path, pid)) = rx.recv().await {
-            debug!(
-                "YARA Worker: Received file to scan: {} (PID: {})",
-                path, pid
+    let match_debug = cfg.alerts.match_debug;
+    let yara_worker_handle = tokio::task::spawn_blocking(move || {
+        info!(
+            target: "scanner",
+            "YARA worker thread started and waiting for files to scan"
+        );
+        let mut scan_error_limiter =
+            LogRateLimiter::new(Duration::from_secs(WORKER_DEBUG_LOG_WINDOW_SECS));
+        while let Some((path, pid)) = rx.blocking_recv() {
+            if scanner::is_path_allowlisted(&path, &yara_allowlist_paths_for_worker) {
+                tracing::trace!(
+                    target: "scanner",
+                    pid = pid,
+                    file = %path,
+                    "YARA worker skipping allowlisted path"
+                );
+                continue;
+            }
+
+            tracing::trace!(
+                target: "scanner",
+                pid = pid,
+                file = %path,
+                "YARA worker received file for scan"
             );
 
-            // This blocks the WORKER thread, not the ETW thread. Perfect.
-            match scanner_clone.scan_file(&path) {
+            match scanner_clone.scan_file(&path, match_debug) {
                 Ok(matches) => {
                     if !matches.is_empty() {
+                        let rule_names: Vec<String> =
+                            matches.iter().map(|rule| rule.rule.clone()).collect();
+
                         warn!(
                             pid = pid,
                             file = %path,
-                            rules = ?matches,
+                            rules = ?rule_names,
                             "YARA detection triggered"
                         );
 
                         // ECS NDJSON output
-                        for rule in &matches {
-                            let alert = build_yara_alert(rule, &path, pid);
+                        for rule_match in &matches {
+                            let match_details = build_yara_match_details(match_debug, rule_match);
+                            let alert =
+                                build_yara_alert(&rule_match.rule, &path, pid, match_details);
                             alert_sink_for_yara.write_alert(&alert);
                             response_engine_for_yara.handle_alert(&alert);
                         }
                     } else {
-                        debug!("YARA Worker: No matches for {}", path);
+                        tracing::trace!(
+                            target: "scanner",
+                            pid = pid,
+                            file = %path,
+                            "YARA worker no matches"
+                        );
                     }
                 }
                 Err(e) => {
-                    debug!("YARA Worker: Failed to scan {} - {}", path, e);
+                    let decision = scan_error_limiter.should_emit("scan_error");
+                    if decision.should_emit {
+                        debug!(
+                            target: "scanner",
+                            pid = pid,
+                            file = %path,
+                            error = %e,
+                            suppressed = decision.suppressed_since_last_emit,
+                            "YARA worker scan failure"
+                        );
+                    }
                 }
             }
         }
-        info!("YARA Worker thread shutting down");
+        info!(target: "scanner", "YARA worker thread shutting down");
     });
+
+    // Initialize IOC engine
+    let ioc_engine = Arc::new(IocEngine::load(&cfg.ioc));
+    if ioc_engine.is_enabled() {
+        let stats = ioc_engine.stats();
+        info!(
+            target: "rustinel",
+            md5 = stats.md5,
+            sha1 = stats.sha1,
+            sha256 = stats.sha256,
+            ip = stats.ip,
+            cidr = stats.cidr,
+            domain_exact = stats.domain_exact,
+            domain_suffix = stats.domain_suffix,
+            path_regex = stats.path_regex,
+            "IOC engine initialized"
+        );
+    } else {
+        info!(target: "rustinel", "IOC detection disabled by configuration");
+    }
+
+    let ioc_engine_for_handler = if ioc_engine.is_enabled() {
+        Some(Arc::clone(&ioc_engine))
+    } else {
+        None
+    };
+
+    // Create background worker channel for IOC hashing (process start only)
+    // Uses spawn_blocking to avoid starving the tokio async thread pool with
+    // CPU-bound crypto work and synchronous file I/O.
+    let (ioc_hash_tx, mut ioc_hash_worker_handle) = if ioc_engine.is_enabled()
+        && ioc_engine.wants_hashing()
+    {
+        let (hash_tx, mut hash_rx) = mpsc::channel::<(String, u32)>(1000);
+        let ioc_engine_for_hash = Arc::clone(&ioc_engine);
+        let alert_sink_for_ioc = alert_sink.clone();
+        let response_engine_for_ioc = response_engine.clone();
+
+        let hash_worker_handle = tokio::task::spawn_blocking(move || {
+            info!(
+                target: "ioc",
+                "IOC hash worker thread started and waiting for files to hash"
+            );
+            let requirements = ioc_engine_for_hash.hash_requirements();
+            let max_file_size = ioc_engine_for_hash.max_file_size_bytes();
+            let mut cache = HashCache::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut hash_error_limiter =
+                LogRateLimiter::new(Duration::from_secs(WORKER_DEBUG_LOG_WINDOW_SECS));
+
+            while let Some((path, pid)) = hash_rx.blocking_recv() {
+                if path.is_empty() {
+                    continue;
+                }
+
+                // Skip allowlisted paths (trusted directories)
+                if ioc_engine_for_hash.is_hash_allowlisted(&path) {
+                    tracing::trace!(
+                        target: "ioc",
+                        pid = pid,
+                        file = %path,
+                        "IOC hash worker skipping allowlisted path"
+                    );
+                    continue;
+                }
+
+                // Skip files exceeding the size limit
+                if max_file_size > 0 {
+                    if let Ok(metadata) = std::fs::metadata(&path) {
+                        if metadata.len() > max_file_size {
+                            tracing::trace!(
+                                target: "ioc",
+                                pid = pid,
+                                file = %path,
+                                file_mb = metadata.len() / (1024 * 1024),
+                                max_mb = max_file_size / (1024 * 1024),
+                                "IOC hash worker skipping oversized file"
+                            );
+                            continue;
+                        }
+                    }
+                }
+
+                let hashes = match cache.get_or_compute(Path::new(&path), requirements, &mut buf) {
+                    Ok(hashes) => hashes,
+                    Err(err) => {
+                        let decision = hash_error_limiter.should_emit("hash_error");
+                        if decision.should_emit {
+                            debug!(
+                                target: "ioc",
+                                pid = pid,
+                                file = %path,
+                                error = %err,
+                                suppressed = decision.suppressed_since_last_emit,
+                                "IOC hash worker failed to hash file"
+                            );
+                        }
+                        continue;
+                    }
+                };
+
+                let matches = ioc_engine_for_hash.match_hashes(&hashes);
+                if !matches.is_empty() {
+                    info!(
+                        pid = pid,
+                        file = %path,
+                        matches = matches.len(),
+                        "IOC hash match detected"
+                    );
+                    for m in matches {
+                        let alert = ioc_engine_for_hash.build_alert_for_hash_match(&m, &path, pid);
+                        alert_sink_for_ioc.write_alert(&alert);
+                        response_engine_for_ioc.handle_alert(&alert);
+                    }
+                } else {
+                    tracing::trace!(
+                        target: "ioc",
+                        pid = pid,
+                        file = %path,
+                        "IOC hash worker no matches"
+                    );
+                }
+            }
+            info!(target: "ioc", "IOC hash worker thread shutting down");
+        });
+
+        (Some(hash_tx), Some(hash_worker_handle))
+    } else {
+        (None, None)
+    };
 
     // Initialize normalizer with process cache and connection aggregator
     let normalizer = Arc::new(Normalizer::new(
@@ -864,12 +1122,17 @@ async fn run_edr(
     let sigma_handler = SigmaDetectionHandler {
         normalizer: Arc::clone(&normalizer),
         engine: Arc::clone(&sigma_engine),
+        ioc_engine: ioc_engine_for_handler,
+        ioc_hash_tx,
         alert_sink: alert_sink.clone(),
         response_engine: response_engine.clone(),
     };
 
     // Create YARA event handler
-    let yara_handler = YaraEventHandler { tx };
+    let yara_handler = YaraEventHandler {
+        tx,
+        allowlist_paths: yara_allowlist_paths,
+    };
 
     // Setup EventRouter (mutable)
     let mut router_inner = EventRouter::new();
@@ -939,6 +1202,14 @@ async fn run_edr(
                 Err(e) => error!("Failed to join YARA worker thread: {}", e),
             }
 
+            if let Some(handle) = ioc_hash_worker_handle.take() {
+                info!("Signaling IOC hash worker to shut down...");
+                match handle.await {
+                    Ok(_) => info!("IOC hash worker thread finished"),
+                    Err(e) => error!("Failed to join IOC hash worker thread: {}", e),
+                }
+            }
+
             info!("Signaling response worker to shut down...");
             match response_worker_handle.await {
                 Ok(_) => info!("Response worker thread finished"),
@@ -959,6 +1230,14 @@ async fn run_edr(
                 match yara_worker_handle.await {
                     Ok(_) => info!("YARA worker thread finished"),
                     Err(e) => error!("Failed to join YARA worker thread: {}", e),
+                }
+
+                if let Some(handle) = ioc_hash_worker_handle.take() {
+                    info!("Signaling IOC hash worker to shut down...");
+                    match handle.await {
+                        Ok(_) => info!("IOC hash worker thread finished"),
+                        Err(e) => error!("Failed to join IOC hash worker thread: {}", e),
+                    }
                 }
 
                 info!("Signaling response worker to shut down...");

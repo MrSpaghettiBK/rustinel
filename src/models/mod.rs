@@ -882,6 +882,322 @@ impl NormalizedEvent {
 
         values
     }
+
+    /// Helper for keyword search with field names - collects all field values
+    /// Used for debug match details to explain which field matched a keyword
+    pub fn all_field_values_with_keys(&self) -> Vec<(&str, &str)> {
+        let mut values = Vec::new();
+
+        values.push(("timestamp", self.timestamp.as_str()));
+        values.push(("EventID", self.event_id_string.as_str()));
+
+        match &self.fields {
+            EventFields::ProcessCreation(f) => {
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+                if let Some(v) = &f.original_file_name {
+                    values.push(("OriginalFileName", v.as_str()));
+                }
+                if let Some(v) = &f.product {
+                    values.push(("Product", v.as_str()));
+                }
+                if let Some(v) = &f.description {
+                    values.push(("Description", v.as_str()));
+                }
+                if let Some(v) = &f.command_line {
+                    values.push(("CommandLine", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+                if let Some(v) = &f.parent_process_id {
+                    values.push(("ParentProcessId", v.as_str()));
+                }
+                if let Some(v) = &f.parent_image {
+                    values.push(("ParentImage", v.as_str()));
+                }
+                if let Some(v) = &f.parent_command_line {
+                    values.push(("ParentCommandLine", v.as_str()));
+                }
+                if let Some(v) = &f.current_directory {
+                    values.push(("CurrentDirectory", v.as_str()));
+                }
+                if let Some(v) = &f.integrity_level {
+                    values.push(("IntegrityLevel", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+                if let Some(v) = &f.target_image {
+                    values.push(("TargetImage", v.as_str()));
+                }
+                if let Some(v) = &f.logon_id {
+                    values.push(("LogonId", v.as_str()));
+                }
+                if let Some(v) = &f.logon_guid {
+                    values.push(("LogonGuid", v.as_str()));
+                }
+            }
+            EventFields::FileEvent(f) => {
+                if let Some(v) = &f.target_filename {
+                    values.push(("TargetFilename", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+                if let Some(v) = &f.creation_utc_time {
+                    values.push(("CreationUtcTime", v.as_str()));
+                }
+                if let Some(v) = &f.previous_creation_utc_time {
+                    values.push(("PreviousCreationUtcTime", v.as_str()));
+                }
+            }
+            EventFields::NetworkConnection(f) => {
+                if let Some(v) = &f.destination_ip {
+                    values.push(("DestinationIp", v.as_str()));
+                }
+                if let Some(v) = &f.source_ip {
+                    values.push(("SourceIp", v.as_str()));
+                }
+                if let Some(v) = &f.destination_port {
+                    values.push(("DestinationPort", v.as_str()));
+                }
+                if let Some(v) = &f.source_port {
+                    values.push(("SourcePort", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+                if let Some(v) = &f.destination_hostname {
+                    values.push(("DestinationHostname", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+            }
+            EventFields::RegistryEvent(f) => {
+                if let Some(v) = &f.target_object {
+                    values.push(("TargetObject", v.as_str()));
+                }
+                if let Some(v) = &f.details {
+                    values.push(("Details", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+                if let Some(v) = &f.event_type {
+                    values.push(("EventType", v.as_str()));
+                }
+                if let Some(v) = &f.new_name {
+                    values.push(("NewName", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+            }
+            EventFields::DnsQuery(f) => {
+                if let Some(v) = &f.query_name {
+                    values.push(("QueryName", v.as_str()));
+                }
+                if let Some(v) = &f.query_results {
+                    values.push(("QueryResults", v.as_str()));
+                }
+                if let Some(v) = &f.query_status {
+                    values.push(("QueryStatus", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+            }
+            EventFields::ImageLoad(f) => {
+                if let Some(v) = &f.image_loaded {
+                    values.push(("ImageLoaded", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+                if let Some(v) = &f.original_file_name {
+                    values.push(("OriginalFileName", v.as_str()));
+                }
+                if let Some(v) = &f.product {
+                    values.push(("Product", v.as_str()));
+                }
+                if let Some(v) = &f.description {
+                    values.push(("Description", v.as_str()));
+                }
+                if let Some(v) = &f.signed {
+                    values.push(("Signed", v.as_str()));
+                }
+                if let Some(v) = &f.signature {
+                    values.push(("Signature", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+            }
+            EventFields::PowerShellScript(f) => {
+                if let Some(v) = &f.script_block_text {
+                    values.push(("ScriptBlockText", v.as_str()));
+                }
+                if let Some(v) = &f.script_block_id {
+                    values.push(("ScriptBlockId", v.as_str()));
+                }
+                if let Some(v) = &f.path {
+                    values.push(("Path", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+            }
+            EventFields::RemoteThread(f) => {
+                if let Some(v) = &f.source_process_id {
+                    values.push(("SourceProcessId", v.as_str()));
+                }
+                if let Some(v) = &f.source_image {
+                    values.push(("SourceImage", v.as_str()));
+                }
+                if let Some(v) = &f.target_process_id {
+                    values.push(("TargetProcessId", v.as_str()));
+                }
+                if let Some(v) = &f.target_image {
+                    values.push(("TargetImage", v.as_str()));
+                }
+                if let Some(v) = &f.start_address {
+                    values.push(("StartAddress", v.as_str()));
+                }
+                if let Some(v) = &f.start_module {
+                    values.push(("StartModule", v.as_str()));
+                }
+                if let Some(v) = &f.start_function {
+                    values.push(("StartFunction", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+            }
+            EventFields::WmiEvent(f) => {
+                if let Some(v) = &f.operation {
+                    values.push(("Operation", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+                if let Some(v) = &f.query {
+                    values.push(("Query", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+                if let Some(v) = &f.event_namespace {
+                    values.push(("EventNamespace", v.as_str()));
+                }
+                if let Some(v) = &f.event_type {
+                    values.push(("EventType", v.as_str()));
+                }
+                if let Some(v) = &f.destination_hostname {
+                    values.push(("DestinationHostname", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+            }
+            EventFields::ServiceCreation(f) => {
+                if let Some(v) = &f.service_name {
+                    values.push(("ServiceName", v.as_str()));
+                }
+                if let Some(v) = &f.service_file_name {
+                    values.push(("ServiceFileName", v.as_str()));
+                }
+                if let Some(v) = &f.service_type {
+                    values.push(("ServiceType", v.as_str()));
+                }
+                if let Some(v) = &f.start_type {
+                    values.push(("StartType", v.as_str()));
+                }
+                if let Some(v) = &f.account_name {
+                    values.push(("AccountName", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+            }
+            EventFields::TaskCreation(f) => {
+                if let Some(v) = &f.task_name {
+                    values.push(("TaskName", v.as_str()));
+                }
+                if let Some(v) = &f.task_content {
+                    values.push(("TaskContent", v.as_str()));
+                }
+                if let Some(v) = &f.user_name {
+                    values.push(("UserName", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+            }
+            EventFields::PipeEvent(f) => {
+                if let Some(v) = &f.pipe_name {
+                    values.push(("PipeName", v.as_str()));
+                }
+                if let Some(v) = &f.process_id {
+                    values.push(("ProcessId", v.as_str()));
+                }
+                if let Some(v) = &f.image {
+                    values.push(("Image", v.as_str()));
+                }
+                if let Some(v) = &f.user {
+                    values.push(("User", v.as_str()));
+                }
+                if let Some(v) = &f.event_type {
+                    values.push(("EventType", v.as_str()));
+                }
+            }
+            EventFields::Generic(map) => {
+                for (key, value) in map {
+                    values.push((key.as_str(), value.as_str()));
+                }
+            }
+        }
+
+        values
+    }
 }
 
 /// Event categories matching ETW providers
@@ -900,6 +1216,88 @@ pub enum EventCategory {
     PipeEvent,
 }
 
+/// Debug verbosity for match details in alerts
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MatchDebugLevel {
+    Off,
+    Summary,
+    Full,
+}
+
+/// Match details attached to alerts when debug is enabled
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchDetails {
+    /// Human-readable explanation of why a rule matched
+    pub summary: String,
+    /// Sigma-specific match details
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sigma: Option<SigmaMatchDetails>,
+    /// YARA-specific match details
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yara: Option<YaraMatchDetails>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigmaMatchDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    pub selection_results: HashMap<String, bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub matches: Vec<SigmaFieldMatch>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub keyword_matches: Vec<SigmaKeywordMatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigmaFieldMatch {
+    pub selection: String,
+    pub field: String,
+    pub matcher: String,
+    pub pattern_type: String,
+    pub pattern: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_sensitive: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigmaKeywordMatch {
+    pub selection: String,
+    pub pattern_type: String,
+    pub keyword: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YaraMatchDetails {
+    pub rules: Vec<YaraRuleMatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YaraRuleMatch {
+    pub rule: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub strings: Vec<YaraStringMatch>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct YaraStringMatch {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+}
+
 /// Alert structure for detection hits
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Alert {
@@ -907,10 +1305,16 @@ pub struct Alert {
     pub severity: AlertSeverity,
     /// Rule name that triggered
     pub rule_name: String,
+    /// Optional rule description / context (e.g., IOC comment)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_description: Option<String>,
     /// Detection engine type
     pub engine: DetectionEngine,
     /// Associated event data
     pub event: NormalizedEvent,
+    /// Optional debug match details
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_details: Option<MatchDetails>,
 }
 
 /// Alert severity levels
@@ -927,6 +1331,7 @@ pub enum AlertSeverity {
 pub enum DetectionEngine {
     Sigma,
     Yara,
+    Ioc,
 }
 
 #[cfg(test)]
@@ -952,8 +1357,10 @@ mod tests {
         let alert = Alert {
             severity: AlertSeverity::High,
             rule_name: "test_rule".to_string(),
+            rule_description: None,
             engine: DetectionEngine::Sigma,
             event,
+            match_details: None,
         };
         let _json = serde_json::to_string(&alert).unwrap();
     }

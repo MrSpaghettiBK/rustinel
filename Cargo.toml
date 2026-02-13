@@ -1,6 +1,6 @@
 [package]
 name = "rustinel"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 authors = []
 description = "High-performance, memory-safe Windows endpoint detection agent with ETW-based telemetry and Sigma rule engine"
@@ -22,6 +22,11 @@ evalexpr = "11.3"
 # Network and encoding utilities for Sigma
 ipnetwork = "0.20"
 base64 = "0.22"
+digest = "0.10"
+hex = "0.4"
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
 
 # Yara scanning
 yara-x = "1.10"

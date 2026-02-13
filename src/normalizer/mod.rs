@@ -19,7 +19,6 @@ use ferrisetw::schema_locator::SchemaLocator;
 use ferrisetw::EventRecord;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use tracing::debug;
 
 /// Event normalizer that converts ETW events to Sigma-compatible format
 pub struct Normalizer {
@@ -63,8 +62,8 @@ impl Normalizer {
         let schema = match self.schema_locator.event_schema(record) {
             Ok(schema) => schema,
             Err(e) => {
-                // Downgraded to debug to reduce noise for providers without valid schemas (e.g. old ImageLoad)
-                debug!(
+                // Keep at TRACE to avoid flooding debug logs with high-volume schema misses.
+                tracing::trace!(
                     "Failed to get schema for event: {:?} (Category: {:?}, ID: {})",
                     e,
                     category,
@@ -91,9 +90,9 @@ impl Normalizer {
             EventCategory::PipeEvent => self.normalize_pipe(&parser, record),
         };
 
-        // DEBUG: Log when normalization fails to help diagnose field mapping issues
-        if fields.is_none() && tracing::enabled!(tracing::Level::DEBUG) {
-            debug!(
+        // TRACE only: normalization misses can be frequent on noisy providers.
+        if fields.is_none() && tracing::enabled!(tracing::Level::TRACE) {
+            tracing::trace!(
                 "Failed to normalize event {} (Category: {:?}, OpCode: {})",
                 record.event_id(),
                 category,
@@ -112,7 +111,6 @@ impl Normalizer {
         // Map Kernel ETW OpCode/EventID to Sysmon Event ID for Sigma rule compatibility
         let sysmon_event_id =
             mapper::map_to_sysmon_id(category, record.opcode(), record.event_id());
-        let process_context = self.build_process_context(&fields, record);
 
         Some(NormalizedEvent {
             timestamp,
@@ -121,7 +119,7 @@ impl Normalizer {
             event_id_string: sysmon_event_id.to_string(), // Cache string for zero-copy flatten()
             opcode: record.opcode(),                      // Keep original OpCode for debugging
             fields,
-            process_context,
+            process_context: None,
         })
     }
 
@@ -240,9 +238,10 @@ impl Normalizer {
                 // Enrichment: Look up parent metadata from cache
                 let (parent_image_cached, parent_cmd_cached) = if let Some(ppid) = parent_pid_u32 {
                     if let Some(parent_meta) = self.process_cache.get_metadata(ppid) {
-                        debug!(
+                        tracing::trace!(
                             "Enriched process PID={} with parent metadata from cache (PPID={})",
-                            pid, ppid
+                            pid,
+                            ppid
                         );
                         (Some(parent_meta.image_name), parent_meta.command_line)
                     } else {
@@ -278,9 +277,11 @@ impl Normalizer {
                     fields.logon_id.clone(),
                     fields.logon_guid.clone(),
                 );
-                debug!(
+                tracing::trace!(
                     "Added process to cache: PID={} CreateTime={} Image={}",
-                    pid, creation_time, img
+                    pid,
+                    creation_time,
+                    img
                 );
             }
         } else if opcode == 2 {
@@ -295,12 +296,13 @@ impl Normalizer {
                 creation_time_opt.or_else(|| self.process_cache.get_latest_creation_time(pid));
             if let Some(creation_time) = creation_time {
                 self.process_cache.remove(pid, creation_time);
-                debug!(
+                tracing::trace!(
                     "Removed process from cache: PID={} CreateTime={}",
-                    pid, creation_time
+                    pid,
+                    creation_time
                 );
             } else {
-                debug!(
+                tracing::trace!(
                     "Process stop missing CreateTime; no cache entry found for PID={}",
                     pid
                 );
@@ -324,7 +326,7 @@ impl Normalizer {
         if let Some(ref filename) = raw_target_filename {
             // Named Pipes have the path format: \Device\NamedPipe\<pipe_name>
             if filename.starts_with(r"\Device\NamedPipe\") {
-                debug!("Detected Named Pipe event: {}", filename);
+                tracing::trace!("Detected Named Pipe event: {}", filename);
 
                 // Extract pipe name by removing the \Device\NamedPipe\ prefix
                 let pipe_name = filename
@@ -345,7 +347,7 @@ impl Normalizer {
                     let pid = record.process_id();
                     if let Some(cached_image) = self.process_cache.get_image(pid) {
                         pipe_fields.image = Some(convert_nt_to_dos(&cached_image));
-                        debug!("Enriched pipe event with cached image for PID={}", pid);
+                        tracing::trace!("Enriched pipe event with cached image for PID={}", pid);
                     }
                 }
 
@@ -395,7 +397,7 @@ impl Normalizer {
             let pid = record.process_id();
             if let Some(cached_image) = self.process_cache.get_image(pid) {
                 fields.image = Some(convert_nt_to_dos(&cached_image));
-                debug!("Enriched registry event with cached image for PID={}", pid);
+                tracing::trace!("Enriched registry event with cached image for PID={}", pid);
             }
         }
 
@@ -429,7 +431,7 @@ impl Normalizer {
             .or_else(|| try_get_port(parser, "LocalPort"))
             .or_else(|| try_get_port(parser, "srcport"));
 
-        debug!(
+        tracing::trace!(
             "Network event (ID={}, OpCode={}): daddr={:?}, saddr={:?}, dport={:?}, sport={:?}",
             record.event_id(),
             record.opcode(),
@@ -460,7 +462,7 @@ impl Normalizer {
             let pid = record.process_id();
             if let Some(cached_image) = self.process_cache.get_image(pid) {
                 fields.image = Some(convert_nt_to_dos(&cached_image));
-                debug!("Enriched network event with cached image for PID={}", pid);
+                tracing::trace!("Enriched network event with cached image for PID={}", pid);
             }
         }
 
@@ -497,9 +499,11 @@ impl Normalizer {
                         .record(image, dest_ip, dest_port, protocol, pid);
 
                     if result == AggregationResult::Aggregated {
-                        debug!(
+                        tracing::trace!(
                             "Suppressed aggregated connection: {} -> {}:{}",
-                            image, dest_ip, dest_port
+                            image,
+                            dest_ip,
+                            dest_port
                         );
                         return None;
                     }
@@ -528,7 +532,7 @@ impl Normalizer {
             let pid = record.process_id();
             if let Some(cached_image) = self.process_cache.get_image(pid) {
                 fields.image = Some(convert_nt_to_dos(&cached_image));
-                debug!("Enriched DNS event with cached image for PID={}", pid);
+                tracing::trace!("Enriched DNS event with cached image for PID={}", pid);
             }
         }
 
@@ -648,7 +652,7 @@ impl Normalizer {
             let pid = record.process_id();
             if let Some(cached_image) = self.process_cache.get_image(pid) {
                 fields.image = Some(convert_nt_to_dos(&cached_image));
-                debug!("Enriched service event with cached image for PID={}", pid);
+                tracing::trace!("Enriched service event with cached image for PID={}", pid);
             }
         }
 
@@ -675,7 +679,7 @@ impl Normalizer {
             let pid = record.process_id();
             if let Some(cached_image) = self.process_cache.get_image(pid) {
                 fields.image = Some(convert_nt_to_dos(&cached_image));
-                debug!("Enriched task event with cached image for PID={}", pid);
+                tracing::trace!("Enriched task event with cached image for PID={}", pid);
             }
         }
 
@@ -701,7 +705,7 @@ impl Normalizer {
             let pid = record.process_id();
             if let Some(cached_image) = self.process_cache.get_image(pid) {
                 fields.image = Some(convert_nt_to_dos(&cached_image));
-                debug!("Enriched pipe event with cached image for PID={}", pid);
+                tracing::trace!("Enriched pipe event with cached image for PID={}", pid);
             }
         }
 
@@ -719,10 +723,20 @@ impl Normalizer {
         }
     }
 
+    /// Build and attach process context lazily for alert enrichment.
+    /// This is intentionally done outside hot-path normalization to avoid
+    /// cloning process metadata for non-alert events.
+    pub fn enrich_process_context(&self, event: &mut NormalizedEvent, fallback_pid: u32) {
+        if event.process_context.is_some() {
+            return;
+        }
+        event.process_context = self.build_process_context(&event.fields, fallback_pid);
+    }
+
     fn build_process_context(
         &self,
         fields: &EventFields,
-        record: &EventRecord,
+        fallback_pid: u32,
     ) -> Option<ProcessContext> {
         if matches!(fields, EventFields::ProcessCreation(_)) {
             return None;
@@ -745,7 +759,7 @@ impl Normalizer {
 
         let pid = pid_str
             .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or_else(|| record.process_id());
+            .unwrap_or(fallback_pid);
 
         if pid == 0 {
             return None;

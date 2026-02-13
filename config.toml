@@ -8,10 +8,23 @@ sigma_rules_path = "rules/sigma"
 yara_enabled = true
 yara_rules_path = "rules/yara"
 
+# Shared allowlist applied to:
+# - response.allowlist_paths
+# - ioc.hash_allowlist_paths
+# - scanner.yara_allowlist_paths
+[allowlist]
+paths = [
+  "C:\\Windows\\",
+  "C:\\Program Files\\",
+  "C:\\Program Files (x86)\\"
+]
+
 # 2. Operational Logging (The Agent's internal health)
 #    Writes to: {directory}/{filename}.YYYY-MM-DD
 [logging]
 level = "info"              # trace, debug, info, warn, error
+# Optional target-aware filter (takes precedence over level when set)
+# filter = "info,engine=info,scanner=info,ioc=info,rustinel::normalizer=info"
 directory = "logs"
 filename = "rustinel.log"
 console_output = true       # If true, duplicate logs to stdout (dev mode)
@@ -21,6 +34,7 @@ console_output = true       # If true, duplicate logs to stdout (dev mode)
 [alerts]
 directory = "logs"
 filename = "alerts.json"    # Will contain newline-delimited JSON (NDJSON)
+match_debug = "off"         # off | summary | full (attach match details to alerts.json)
 
 # 4. Active Response (Optional Prevention)
 [response]
@@ -42,8 +56,13 @@ allowlist_images = [
   "fontdrvhost.exe",
   "sihost.exe"
 ]
-allowlist_paths = [
-  "C:\\Windows\\",
-  "C:\\Program Files\\",
-  "C:\\Program Files (x86)\\"
-]
+
+# 5. Atomic IOC Detection (Hashes, IPs, Domains, Path Regex)
+[ioc]
+enabled = true
+hashes_path = "rules/ioc/hashes.txt"
+ips_path = "rules/ioc/ips.txt"
+domains_path = "rules/ioc/domains.txt"
+paths_regex_path = "rules/ioc/paths_regex.txt"
+default_severity = "high"
+max_file_size_mb = 50

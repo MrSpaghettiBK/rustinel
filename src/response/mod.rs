@@ -75,7 +75,7 @@ impl ResponseEngine {
 
         let effective_severity = match alert.engine {
             DetectionEngine::Yara => AlertSeverity::Critical,
-            DetectionEngine::Sigma => alert.severity,
+            DetectionEngine::Sigma | DetectionEngine::Ioc => alert.severity,
         };
 
         if !severity_at_least(effective_severity, self.min_severity) {
@@ -454,6 +454,7 @@ mod tests {
         let alert = Alert {
             severity: AlertSeverity::High,
             rule_name: "Test".to_string(),
+            rule_description: None,
             engine: DetectionEngine::Sigma,
             event: NormalizedEvent {
                 timestamp: "2026-02-03T00:00:00Z".to_string(),
@@ -480,6 +481,7 @@ mod tests {
                 }),
                 process_context: None,
             },
+            match_details: None,
         };
 
         let (pid, image) = extract_process_info(&alert);

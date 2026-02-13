@@ -25,25 +25,29 @@ Unknown `min_severity` values default to `critical` and a warning is logged.
 Allowlists prevent termination of trusted processes:
 
 - `allowlist_images`: basenames (e.g. `cmd.exe`) or full paths.
-- `allowlist_paths`: path prefixes (case-insensitive).
+- `allowlist_paths`: path prefixes (case-insensitive). If unset, inherits from `allowlist.paths`.
 
-Defaults include:
+Shared default trusted path prefixes are configured in `[allowlist].paths`:
 `C:\Windows\`, `C:\Program Files\`, `C:\Program Files (x86)\`.
 
 ## Configuration
 
 ```toml
+[allowlist]
+paths = [
+  "C:\\Windows\\",
+  "C:\\Program Files\\",
+  "C:\\Program Files (x86)\\",
+]
+
 [response]
 enabled = true
 prevention_enabled = false
 min_severity = "critical"
 channel_capacity = 128
 allowlist_images = []
-allowlist_paths = [
-  "C:\\Windows\\",
-  "C:\\Program Files\\",
-  "C:\\Program Files (x86)\\",
-]
+# Optional module-specific override:
+# allowlist_paths = ["C:\\CustomTrusted\\"]
 ```
 
 ## Logging

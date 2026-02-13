@@ -20,7 +20,10 @@ use std::path::Path;
 use std::sync::LazyLock;
 use tracing::{debug, info, warn};
 
-use crate::models::{Alert, AlertSeverity, DetectionEngine, EventCategory, NormalizedEvent};
+use crate::models::{
+    Alert, AlertSeverity, DetectionEngine, EventCategory, MatchDebugLevel, MatchDetails,
+    NormalizedEvent, SigmaFieldMatch, SigmaKeywordMatch, SigmaMatchDetails,
+};
 
 // ============================================================================
 // Lazy-initialized Regular Expressions
@@ -57,6 +60,12 @@ static NOT_UPPERCASE_REGEX: LazyLock<Regex> =
 /// Regex for replacing "not" keywords (lowercase)
 static NOT_LOWERCASE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bnot\b").expect("NOT_LOWERCASE_REGEX pattern is valid"));
+
+// Match debug caps (to avoid huge alerts)
+const MAX_SIGMA_MATCHES: usize = 16;
+const MAX_SIGMA_KEYWORD_MATCHES: usize = 8;
+const MAX_MATCH_VALUE_LEN: usize = 160;
+const MAX_PATTERN_LEN: usize = 160;
 
 // ============================================================================
 // Data Structures
@@ -202,7 +211,7 @@ pub struct FieldCriterion {
 }
 
 /// Compiled Sigma rule with regex patterns
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CompiledRule {
     /// Original rule
     pub rule: SigmaRule,
@@ -216,6 +225,19 @@ pub struct CompiledRule {
 
     /// Logsource category
     pub category: String,
+
+    /// Pre-transpiled condition expression (evalexpr syntax) when present
+    pub transpiled_condition: Option<String>,
+
+    /// Pre-compiled evalexpr condition tree for hot-path evaluation
+    pub condition_tree: Option<Node>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RuleSkipReason {
+    Product,
+    Service,
+    Category,
 }
 
 /// Field pattern for matching
@@ -267,29 +289,61 @@ pub struct Engine {
     /// Failed rule paths and error messages (for diagnostics)
     failed_rules: Vec<(String, String)>,
 
+    /// Rules skipped at load time due to unsupported logsource product.
+    skipped_product_rules: usize,
+
+    /// Rules skipped at load time due to unsupported logsource service.
+    skipped_service_rules: usize,
+
+    /// Rules skipped at load time due to unsupported/irrelevant category.
+    skipped_category_rules: usize,
+
     /// Controls logging for rule logic evaluation errors.
     rule_logic_error_log_level: RuleLogicErrorLogLevel,
+
+    /// Controls whether match debug details are attached to alerts.
+    match_debug: MatchDebugLevel,
 }
 
 impl Engine {
     /// Creates a new engine instance
     pub fn new() -> Self {
-        Self::new_with_rule_logic_error_log_level(RuleLogicErrorLogLevel::Warn)
+        Self::new_with_rule_logic_error_log_level_and_match_debug(
+            RuleLogicErrorLogLevel::Warn,
+            MatchDebugLevel::Off,
+        )
     }
 
     /// Creates a new engine instance that derives rule-logic error logging
     /// behavior from the provided logging level string.
+    #[allow(dead_code)]
     pub fn new_with_logging_level(logging_level: &str) -> Self {
         let level = RuleLogicErrorLogLevel::from_logging_level(logging_level);
-        Self::new_with_rule_logic_error_log_level(level)
+        Self::new_with_rule_logic_error_log_level_and_match_debug(level, MatchDebugLevel::Off)
     }
 
-    fn new_with_rule_logic_error_log_level(level: RuleLogicErrorLogLevel) -> Self {
+    /// Creates a new engine instance that also configures match debug verbosity.
+    pub fn new_with_logging_level_and_match_debug(
+        logging_level: &str,
+        match_debug: MatchDebugLevel,
+    ) -> Self {
+        let level = RuleLogicErrorLogLevel::from_logging_level(logging_level);
+        Self::new_with_rule_logic_error_log_level_and_match_debug(level, match_debug)
+    }
+
+    fn new_with_rule_logic_error_log_level_and_match_debug(
+        level: RuleLogicErrorLogLevel,
+        match_debug: MatchDebugLevel,
+    ) -> Self {
         Self {
             rules_by_category: HashMap::new(),
             rule_count: 0,
             failed_rules: Vec::new(),
+            skipped_product_rules: 0,
+            skipped_service_rules: 0,
+            skipped_category_rules: 0,
             rule_logic_error_log_level: level,
+            match_debug,
         }
     }
 
@@ -427,6 +481,97 @@ impl Engine {
         PatternMatcher::Default
     }
 
+    fn normalized_category(rule: &SigmaRule) -> Option<String> {
+        rule.logsource
+            .category
+            .as_deref()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn is_supported_category(category: &str) -> bool {
+        matches!(
+            category,
+            "process_creation"
+                | "network_connection"
+                | "file_event"
+                | "file_create"
+                | "file_delete"
+                | "registry_event"
+                | "registry_add"
+                | "registry_set"
+                | "registry_delete"
+                | "dns_query"
+                | "image_load"
+                | "ps_script"
+                | "wmi_event"
+                | "service_creation"
+                | "task_creation"
+                | "pipe_created"
+        )
+    }
+
+    fn is_supported_product(rule: &SigmaRule) -> bool {
+        let Some(product) = rule.logsource.product.as_deref() else {
+            return true;
+        };
+        let product = product.trim().to_ascii_lowercase();
+        product.is_empty() || product == "windows"
+    }
+
+    fn is_supported_service(rule: &SigmaRule) -> bool {
+        let Some(service) = rule.logsource.service.as_deref() else {
+            return true;
+        };
+        let service = service.trim().to_ascii_lowercase();
+        if service.is_empty() {
+            return true;
+        }
+
+        matches!(
+            service.as_str(),
+            "sysmon"
+                | "security"
+                | "system"
+                | "taskscheduler"
+                | "task scheduler"
+                | "powershell"
+                | "powershell-classic"
+                | "microsoft-windows-powershell"
+                | "dns-client"
+                | "dns"
+                | "wmi"
+        )
+    }
+
+    fn skip_reason_for_rule(rule: &SigmaRule) -> Option<RuleSkipReason> {
+        let Some(category) = Self::normalized_category(rule) else {
+            return Some(RuleSkipReason::Category);
+        };
+
+        if !Self::is_supported_category(&category) {
+            return Some(RuleSkipReason::Category);
+        }
+
+        if !Self::is_supported_product(rule) {
+            return Some(RuleSkipReason::Product);
+        }
+
+        if !Self::is_supported_service(rule) {
+            return Some(RuleSkipReason::Service);
+        }
+
+        None
+    }
+
+    fn increment_skip_counter(&mut self, reason: RuleSkipReason) {
+        match reason {
+            RuleSkipReason::Product => self.skipped_product_rules += 1,
+            RuleSkipReason::Service => self.skipped_service_rules += 1,
+            RuleSkipReason::Category => self.skipped_category_rules += 1,
+        }
+    }
+
     /// Load rules from a directory (recursively scans subdirectories)
     pub fn load_rules<P: AsRef<Path>>(&mut self, rules_dir: P) -> Result<()> {
         let rules_dir = rules_dir.as_ref();
@@ -445,6 +590,10 @@ impl Engine {
         for (category, rules) in &self.rules_by_category {
             info!("  Category '{}': {} rules", category, rules.len());
         }
+        info!(
+            "Skipped rules - category: {}, product: {}, service: {}",
+            self.skipped_category_rules, self.skipped_product_rules, self.skipped_service_rules
+        );
 
         Ok(())
     }
@@ -531,6 +680,11 @@ impl Engine {
                 let rule: SigmaRule = serde_yaml::from_value(merged)
                     .context("Failed to parse merged global sub-rule")?;
 
+                if let Some(reason) = Self::skip_reason_for_rule(&rule) {
+                    self.increment_skip_counter(reason);
+                    continue;
+                }
+
                 // Compile and add the rule
                 let compiled = self.compile_rule(rule)?;
                 let category = compiled.category.clone();
@@ -545,6 +699,11 @@ impl Engine {
             // Single rule or non-global multi-document (process first document only)
             let rule: SigmaRule =
                 serde_yaml::from_value(documents[0].clone()).context("Failed to parse YAML")?;
+
+            if let Some(reason) = Self::skip_reason_for_rule(&rule) {
+                self.increment_skip_counter(reason);
+                return Ok(());
+            }
 
             // Compile the rule
             let compiled = self.compile_rule(rule)?;
@@ -564,11 +723,7 @@ impl Engine {
 
     /// Compile a Sigma rule into efficient matching patterns
     fn compile_rule(&self, rule: SigmaRule) -> Result<CompiledRule> {
-        let category = rule
-            .logsource
-            .category
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+        let category = Self::normalized_category(&rule).unwrap_or_else(|| "unknown".to_string());
 
         let mut patterns: HashMap<String, Vec<FieldPattern>> = HashMap::new();
         let mut selections: HashMap<String, Selection> = HashMap::new();
@@ -617,11 +772,28 @@ impl Engine {
             );
         }
 
+        let mut transpiled_condition = None;
+        let mut condition_tree = None;
+        if let Some(condition) = rule.detection.condition.as_deref() {
+            let selection_keys: Vec<String> = selections.keys().cloned().collect();
+            let transpiled = self.transpile_sigma_condition(condition, &selection_keys);
+            let tree = build_operator_tree(&transpiled).with_context(|| {
+                format!(
+                    "Failed to compile Sigma condition for rule '{}': {}",
+                    rule.title, condition
+                )
+            })?;
+            transpiled_condition = Some(transpiled);
+            condition_tree = Some(tree);
+        }
+
         Ok(CompiledRule {
             rule,
             patterns,
             selections,
             category,
+            transpiled_condition,
+            condition_tree,
         })
     }
 
@@ -1119,6 +1291,7 @@ impl Engine {
     }
 
     /// Phase 3: Evaluate the transpiled condition using evalexpr
+    #[allow(dead_code)] // Kept for dedicated transpiler/evaluator unit tests.
     fn check_condition(&self, condition_str: &str, results: &HashMap<String, bool>) -> bool {
         let mut context = HashMapContext::new();
 
@@ -1137,15 +1310,16 @@ impl Engine {
         let eval_friendly_condition =
             self.transpile_sigma_condition(condition_str, &selection_keys);
 
-        debug!(
+        tracing::trace!(
             "Original condition: '{}' -> Transpiled: '{}'",
-            condition_str, eval_friendly_condition
+            condition_str,
+            eval_friendly_condition
         );
 
         // Evaluate the boolean expression
         match eval_boolean_with_context(&eval_friendly_condition, &context) {
             Ok(val) => {
-                debug!("Condition evaluation result: {}", val);
+                tracing::trace!("Condition evaluation result: {}", val);
                 val
             }
             Err(e) => {
@@ -1169,6 +1343,395 @@ impl Engine {
         }
     }
 
+    fn check_compiled_condition(
+        &self,
+        compiled_rule: &CompiledRule,
+        results: &HashMap<String, bool>,
+    ) -> bool {
+        let Some(tree) = compiled_rule.condition_tree.as_ref() else {
+            return false;
+        };
+
+        let mut context = HashMapContext::new();
+        for (key, value) in results {
+            if let Err(e) = context.set_value(key.clone(), (*value).into()) {
+                warn!("Failed to set context value for '{}': {}", key, e);
+                return false;
+            }
+        }
+
+        match tree.eval_boolean_with_context(&context) {
+            Ok(val) => {
+                tracing::trace!("Condition evaluation result: {}", val);
+                val
+            }
+            Err(e) => {
+                let condition = compiled_rule
+                    .transpiled_condition
+                    .as_deref()
+                    .unwrap_or("<missing>");
+                match self.rule_logic_error_log_level {
+                    RuleLogicErrorLogLevel::Off => {}
+                    RuleLogicErrorLogLevel::Debug => {
+                        debug!(
+                            "Rule logic evaluation error for condition '{}': {}",
+                            condition, e
+                        );
+                    }
+                    RuleLogicErrorLogLevel::Warn => {
+                        warn!(
+                            "Rule logic evaluation error for condition '{}': {}",
+                            condition, e
+                        );
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    fn truncate_str(s: &str, max_len: usize) -> (String, bool) {
+        if s.len() <= max_len {
+            return (s.to_string(), false);
+        }
+
+        if max_len <= 3 {
+            let mut end = max_len;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            return (s[..end].to_string(), true);
+        }
+
+        let limit = max_len - 3;
+        let mut end = limit;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        let mut out = s[..end].to_string();
+        out.push_str("...");
+        (out, true)
+    }
+
+    fn pattern_descriptor(pattern: &FieldPattern) -> (String, String, Option<bool>) {
+        match pattern {
+            FieldPattern::Exact(s, cased) => ("exact".to_string(), s.clone(), Some(*cased)),
+            FieldPattern::Contains(s, cased) => ("contains".to_string(), s.clone(), Some(*cased)),
+            FieldPattern::StartsWith(s, cased) => {
+                ("startswith".to_string(), s.clone(), Some(*cased))
+            }
+            FieldPattern::EndsWith(s, cased) => ("endswith".to_string(), s.clone(), Some(*cased)),
+            FieldPattern::Regex(re) => ("regex".to_string(), re.as_str().to_string(), None),
+            FieldPattern::FieldRef(other) => ("fieldref".to_string(), other.clone(), None),
+            FieldPattern::OneOf(values) => ("one_of".to_string(), values.join(", "), None),
+            FieldPattern::Cidr(net) => ("cidr".to_string(), net.to_string(), None),
+            FieldPattern::Numeric(value, op) => {
+                let op_str = match op {
+                    NumericOp::Lt => "<",
+                    NumericOp::Gt => ">",
+                    NumericOp::Le => "<=",
+                    NumericOp::Ge => ">=",
+                };
+                ("numeric".to_string(), format!("{} {}", op_str, value), None)
+            }
+            FieldPattern::Null => ("null".to_string(), "null".to_string(), None),
+            FieldPattern::NotNull => ("not_null".to_string(), "not_null".to_string(), None),
+        }
+    }
+
+    fn collect_keyword_matches(
+        &self,
+        event: &NormalizedEvent,
+        selection_id: &str,
+        keywords: &[FieldPattern],
+        level: MatchDebugLevel,
+        keyword_matches: &mut Vec<SigmaKeywordMatch>,
+        truncated: &mut bool,
+    ) -> bool {
+        let mut matched = false;
+        let values = event.all_field_values_with_keys();
+
+        for pattern in keywords {
+            let (pattern_type, pattern_value, _) = Self::pattern_descriptor(pattern);
+            let (pattern_value, pattern_truncated) =
+                Self::truncate_str(&pattern_value, MAX_PATTERN_LEN);
+            if pattern_truncated {
+                *truncated = true;
+            }
+
+            for (field, value) in &values {
+                if self.matches_pattern(value, pattern, None) {
+                    matched = true;
+                    if keyword_matches.len() >= MAX_SIGMA_KEYWORD_MATCHES {
+                        *truncated = true;
+                        return matched;
+                    }
+
+                    let value = if matches!(level, MatchDebugLevel::Full) {
+                        let (val, val_truncated) = Self::truncate_str(value, MAX_MATCH_VALUE_LEN);
+                        if val_truncated {
+                            *truncated = true;
+                        }
+                        Some(val)
+                    } else {
+                        None
+                    };
+
+                    keyword_matches.push(SigmaKeywordMatch {
+                        selection: selection_id.to_string(),
+                        pattern_type: pattern_type.clone(),
+                        keyword: pattern_value.clone(),
+                        field: Some((*field).to_string()),
+                        value,
+                    });
+                }
+            }
+        }
+
+        matched
+    }
+
+    fn collect_field_matches(
+        &self,
+        event: &NormalizedEvent,
+        selection_id: &str,
+        criteria: &[FieldCriterion],
+        level: MatchDebugLevel,
+        matches: &mut Vec<SigmaFieldMatch>,
+        truncated: &mut bool,
+    ) {
+        for criterion in criteria {
+            if matches.len() >= MAX_SIGMA_MATCHES {
+                *truncated = true;
+                return;
+            }
+
+            let matcher = if matches!(criterion.matcher, PatternMatcher::All) {
+                "all"
+            } else {
+                "any"
+            };
+
+            let field_value = event.get_field(&criterion.field);
+
+            match field_value {
+                Some(value) => {
+                    for pattern in &criterion.patterns {
+                        if !self.matches_pattern(value, pattern, Some(event)) {
+                            continue;
+                        }
+
+                        if matches.len() >= MAX_SIGMA_MATCHES {
+                            *truncated = true;
+                            return;
+                        }
+
+                        let (pattern_type, pattern_value, case_sensitive) =
+                            Self::pattern_descriptor(pattern);
+                        let (pattern_value, pattern_truncated) =
+                            Self::truncate_str(&pattern_value, MAX_PATTERN_LEN);
+                        if pattern_truncated {
+                            *truncated = true;
+                        }
+
+                        let value = if matches!(level, MatchDebugLevel::Full) {
+                            let (val, val_truncated) =
+                                Self::truncate_str(value, MAX_MATCH_VALUE_LEN);
+                            if val_truncated {
+                                *truncated = true;
+                            }
+                            Some(val)
+                        } else {
+                            None
+                        };
+
+                        matches.push(SigmaFieldMatch {
+                            selection: selection_id.to_string(),
+                            field: criterion.field.clone(),
+                            matcher: matcher.to_string(),
+                            pattern_type,
+                            pattern: pattern_value,
+                            case_sensitive,
+                            value,
+                        });
+                    }
+                }
+                None => {
+                    for pattern in &criterion.patterns {
+                        if !self.matches_pattern_null(pattern) {
+                            continue;
+                        }
+
+                        if matches.len() >= MAX_SIGMA_MATCHES {
+                            *truncated = true;
+                            return;
+                        }
+
+                        let (pattern_type, pattern_value, case_sensitive) =
+                            Self::pattern_descriptor(pattern);
+                        let (pattern_value, pattern_truncated) =
+                            Self::truncate_str(&pattern_value, MAX_PATTERN_LEN);
+                        if pattern_truncated {
+                            *truncated = true;
+                        }
+
+                        matches.push(SigmaFieldMatch {
+                            selection: selection_id.to_string(),
+                            field: criterion.field.clone(),
+                            matcher: matcher.to_string(),
+                            pattern_type,
+                            pattern: pattern_value,
+                            case_sensitive,
+                            value: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn build_sigma_summary(
+        &self,
+        rule: &CompiledRule,
+        level: MatchDebugLevel,
+        matches: &[SigmaFieldMatch],
+        keyword_matches: &[SigmaKeywordMatch],
+        truncated: bool,
+    ) -> String {
+        let mut parts = Vec::new();
+        let mut summary_truncated = truncated;
+
+        if let Some(condition) = &rule.rule.detection.condition {
+            let (cond, cond_truncated) = Self::truncate_str(condition, MAX_PATTERN_LEN);
+            if cond_truncated {
+                summary_truncated = true;
+            }
+            parts.push(format!("condition matched: {}", cond));
+        }
+
+        if let Some(first_match) = matches.first() {
+            let mut detail = format!(
+                "{} matched {} {} '{}'",
+                first_match.selection,
+                first_match.field,
+                first_match.pattern_type,
+                first_match.pattern
+            );
+            if matches!(level, MatchDebugLevel::Full) {
+                if let Some(value) = &first_match.value {
+                    detail.push_str(&format!(" with value '{}'", value));
+                }
+            }
+            parts.push(detail);
+        } else if let Some(first_keyword) = keyword_matches.first() {
+            let mut detail = format!(
+                "{} keyword {} '{}'",
+                first_keyword.selection, first_keyword.pattern_type, first_keyword.keyword
+            );
+            if let Some(field) = &first_keyword.field {
+                detail.push_str(&format!(" in {}", field));
+            }
+            if matches!(level, MatchDebugLevel::Full) {
+                if let Some(value) = &first_keyword.value {
+                    detail.push_str(&format!(" with value '{}'", value));
+                }
+            }
+            parts.push(detail);
+        }
+
+        if parts.is_empty() {
+            parts.push("rule matched".to_string());
+        }
+
+        let mut summary = parts.join("; ");
+        if summary_truncated {
+            summary.push_str(" (truncated)");
+        }
+
+        summary
+    }
+
+    fn build_sigma_match_details(
+        &self,
+        event: &NormalizedEvent,
+        rule: &CompiledRule,
+        selection_results: &HashMap<String, bool>,
+    ) -> Option<MatchDetails> {
+        if matches!(self.match_debug, MatchDebugLevel::Off) {
+            return None;
+        }
+
+        let level = self.match_debug;
+        let mut matches = Vec::new();
+        let mut keyword_matches = Vec::new();
+        let mut truncated = false;
+
+        for (selection_id, selection) in &rule.selections {
+            let matched = selection_results
+                .get(selection_id)
+                .copied()
+                .unwrap_or(false);
+            if !matched {
+                continue;
+            }
+
+            if !selection.keywords.is_empty() {
+                self.collect_keyword_matches(
+                    event,
+                    selection_id,
+                    &selection.keywords,
+                    level,
+                    &mut keyword_matches,
+                    &mut truncated,
+                );
+            }
+
+            if !selection.alternative_field_criteria.is_empty() {
+                for criteria in &selection.alternative_field_criteria {
+                    if self.check_field_criteria_group(event, criteria) {
+                        self.collect_field_matches(
+                            event,
+                            selection_id,
+                            criteria,
+                            level,
+                            &mut matches,
+                            &mut truncated,
+                        );
+                        if matches.len() >= MAX_SIGMA_MATCHES {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !selection.field_criteria.is_empty()
+                && self.check_field_criteria_group(event, &selection.field_criteria)
+            {
+                self.collect_field_matches(
+                    event,
+                    selection_id,
+                    &selection.field_criteria,
+                    level,
+                    &mut matches,
+                    &mut truncated,
+                );
+            }
+        }
+
+        let summary = self.build_sigma_summary(rule, level, &matches, &keyword_matches, truncated);
+
+        Some(MatchDetails {
+            summary,
+            sigma: Some(SigmaMatchDetails {
+                condition: rule.rule.detection.condition.clone(),
+                selection_results: selection_results.clone(),
+                matches,
+                keyword_matches,
+            }),
+            yara: None,
+        })
+    }
+
     /// Check an event against loaded rules
     /// OPTIMIZED: Uses zero-copy field access instead of HashMap creation
     pub fn check_event(&self, event: &NormalizedEvent) -> Option<Alert> {
@@ -1182,7 +1745,7 @@ impl Engine {
                 continue;
             };
 
-            debug!(
+            tracing::trace!(
                 "Checking event against {} rule(s) in category '{}'",
                 rules.len(),
                 category
@@ -1190,55 +1753,53 @@ impl Engine {
 
             // Check each rule
             for compiled_rule in rules {
-                debug!("========================================");
-                debug!("Evaluating rule: '{}'", compiled_rule.rule.title);
-                debug!("Rule ID: {:?}", compiled_rule.rule.id);
+                tracing::trace!("========================================");
+                tracing::trace!("Evaluating rule: '{}'", compiled_rule.rule.title);
+                tracing::trace!("Rule ID: {:?}", compiled_rule.rule.id);
 
                 // NOTE: Detailed field logging removed for performance (avoid HashMap allocation)
                 // Use get_field() or all_field_values() if debugging specific fields
 
-                let is_match = if let Some(condition) = &compiled_rule.rule.detection.condition {
+                let selection_results = self.evaluate_selections(event, compiled_rule);
+
+                tracing::trace!("Selection evaluation results:");
+                for (sel_id, result) in &selection_results {
+                    tracing::trace!("  {} = {}", sel_id, result);
+                }
+
+                let is_match = if compiled_rule.condition_tree.is_some() {
                     // NEW LOGIC PIPELINE: Rule has explicit condition
-                    debug!(
+                    tracing::trace!(
                         "Rule '{}': Using condition-based evaluation: '{}'",
-                        compiled_rule.rule.title, condition
+                        compiled_rule.rule.title,
+                        compiled_rule
+                            .rule
+                            .detection
+                            .condition
+                            .as_deref()
+                            .unwrap_or_default()
                     );
 
-                    // Phase 1: Evaluate all selections
-                    let selection_results = self.evaluate_selections(event, compiled_rule);
-
-                    debug!("Selection evaluation results:");
-                    for (sel_id, result) in &selection_results {
-                        debug!("  {} = {}", sel_id, result);
-                    }
-
-                    // Phase 3: Evaluate condition (Phase 2 is done inside check_condition)
-                    let condition_result = self.check_condition(condition, &selection_results);
-                    debug!("Final condition result: {}", condition_result);
+                    // Phase 3: Evaluate precompiled condition tree.
+                    let condition_result =
+                        self.check_compiled_condition(compiled_rule, &selection_results);
+                    tracing::trace!("Final condition result: {}", condition_result);
                     condition_result
                 } else {
                     // LEGACY LOGIC: No explicit condition, use simple AND logic (implied OR)
                     // This is the default behavior for older Sigma rules
-                    debug!(
+                    tracing::trace!(
                         "Rule '{}': Using legacy AND/OR evaluation (no condition)",
                         compiled_rule.rule.title
                     );
 
-                    // Evaluate all selections and return true if ANY match (implied OR)
-                    let selection_results = self.evaluate_selections(event, compiled_rule);
-
-                    debug!("Selection evaluation results:");
-                    for (sel_id, result) in &selection_results {
-                        debug!("  {} = {}", sel_id, result);
-                    }
-
                     let any_match = selection_results.values().any(|&v| v);
-                    debug!("Legacy evaluation (any selection matches): {}", any_match);
+                    tracing::trace!("Legacy evaluation (any selection matches): {}", any_match);
                     any_match
                 };
 
                 if is_match {
-                    debug!("✓ Rule '{}' MATCHED!", compiled_rule.rule.title);
+                    tracing::trace!("✓ Rule '{}' MATCHED!", compiled_rule.rule.title);
 
                     // Create alert
                     let severity = match compiled_rule.rule.level.as_deref() {
@@ -1251,11 +1812,17 @@ impl Engine {
                     return Some(Alert {
                         severity,
                         rule_name: compiled_rule.rule.title.clone(),
+                        rule_description: compiled_rule.rule.description.clone(),
                         engine: DetectionEngine::Sigma,
                         event: event.clone(),
+                        match_details: self.build_sigma_match_details(
+                            event,
+                            compiled_rule,
+                            &selection_results,
+                        ),
                     });
                 } else {
-                    debug!("✗ Rule '{}' did NOT match", compiled_rule.rule.title);
+                    tracing::trace!("✗ Rule '{}' did NOT match", compiled_rule.rule.title);
                 }
             }
         }
@@ -1321,7 +1888,7 @@ impl Engine {
     /// OPTIMIZED: Takes &NormalizedEvent directly
     #[allow(dead_code)]
     fn matches_rule(&self, event: &NormalizedEvent, rule: &CompiledRule) -> bool {
-        use tracing::debug;
+        use tracing::trace;
 
         // Simple AND logic: all patterns must match
         for (field_name, patterns) in &rule.patterns {
@@ -1330,39 +1897,45 @@ impl Engine {
             let field_value = match field_value {
                 Some(value) => value,
                 None => {
-                    debug!(
+                    trace!(
                         "Rule '{}': Field '{}' not found in event",
-                        rule.rule.title, field_name
+                        rule.rule.title,
+                        field_name
                     );
                     return false;
                 }
             };
 
-            debug!(
+            trace!(
                 "Rule '{}': Checking field '{}' = '{}'",
-                rule.rule.title, field_name, field_value
+                rule.rule.title,
+                field_name,
+                field_value
             );
 
             // Check if any pattern matches (OR within field)
             let matches = patterns.iter().any(|pattern| {
                 let result = self.matches_pattern(field_value, pattern, Some(event));
-                debug!(
+                trace!(
                     "  Pattern {:?} matches '{}': {}",
-                    pattern, field_value, result
+                    pattern,
+                    field_value,
+                    result
                 );
                 result
             });
 
             if !matches {
-                debug!(
+                trace!(
                     "Rule '{}': No pattern matched for field '{}'",
-                    rule.rule.title, field_name
+                    rule.rule.title,
+                    field_name
                 );
                 return false;
             }
         }
 
-        debug!("Rule '{}': ALL patterns matched!", rule.rule.title);
+        trace!("Rule '{}': ALL patterns matched!", rule.rule.title);
         true
     }
 
@@ -1496,6 +2069,9 @@ impl Engine {
                 .map(|(k, v)| (k.clone(), v.len()))
                 .collect(),
             failed_rules: self.failed_rules.clone(),
+            skipped_product_rules: self.skipped_product_rules,
+            skipped_service_rules: self.skipped_service_rules,
+            skipped_category_rules: self.skipped_category_rules,
         }
     }
 }
@@ -1513,6 +2089,9 @@ pub struct EngineStats {
     pub rules_by_category: HashMap<String, usize>,
     #[allow(dead_code)] // Used by validation binaries outside this crate.
     pub failed_rules: Vec<(String, String)>,
+    pub skipped_product_rules: usize,
+    pub skipped_service_rules: usize,
+    pub skipped_category_rules: usize,
 }
 
 #[cfg(test)]
@@ -2017,5 +2596,88 @@ level: high
 
         assert_eq!(results.get("selection1"), Some(&true));
         assert_eq!(results.get("selection2"), Some(&false));
+    }
+
+    #[test]
+    fn test_skip_non_windows_product_rule() {
+        let rule_yaml = r#"
+title: Linux Process Rule
+logsource:
+  product: linux
+  category: process_creation
+detection:
+  selection:
+    Image: "*bash"
+  condition: selection
+"#;
+
+        let rule: SigmaRule = serde_yaml::from_str(rule_yaml).unwrap();
+        assert!(matches!(
+            Engine::skip_reason_for_rule(&rule),
+            Some(RuleSkipReason::Product)
+        ));
+    }
+
+    #[test]
+    fn test_skip_unsupported_service_rule() {
+        let rule_yaml = r#"
+title: Unsupported Service
+logsource:
+  product: windows
+  service: cloudtrail
+  category: process_creation
+detection:
+  selection:
+    Image: "*cmd.exe"
+  condition: selection
+"#;
+
+        let rule: SigmaRule = serde_yaml::from_str(rule_yaml).unwrap();
+        assert!(matches!(
+            Engine::skip_reason_for_rule(&rule),
+            Some(RuleSkipReason::Service)
+        ));
+    }
+
+    #[test]
+    fn test_skip_unsupported_category_rule() {
+        let rule_yaml = r#"
+title: Unsupported Category
+logsource:
+  product: windows
+  category: process_tampering
+detection:
+  selection:
+    Image: "*cmd.exe"
+  condition: selection
+"#;
+
+        let rule: SigmaRule = serde_yaml::from_str(rule_yaml).unwrap();
+        assert!(matches!(
+            Engine::skip_reason_for_rule(&rule),
+            Some(RuleSkipReason::Category)
+        ));
+    }
+
+    #[test]
+    fn test_compile_rule_builds_precompiled_condition_tree() {
+        let engine = Engine::new();
+        let rule_yaml = r#"
+title: Condition AST
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  sel1:
+    Image: "*cmd.exe"
+  sel2:
+    CommandLine: "* /c *"
+  condition: sel1 and sel2
+"#;
+
+        let rule: SigmaRule = serde_yaml::from_str(rule_yaml).unwrap();
+        let compiled = engine.compile_rule(rule).unwrap();
+        assert!(compiled.transpiled_condition.is_some());
+        assert!(compiled.condition_tree.is_some());
     }
 }

@@ -1,8 +1,8 @@
 # Rustinel Documentation
 
 Rustinel is a high-performance, user-mode Windows EDR agent written in Rust. It collects
-kernel telemetry via ETW, normalizes to Sysmon-style fields, runs Sigma and YARA, and
-writes ECS NDJSON alerts.
+kernel telemetry via ETW, normalizes to Sysmon-style fields, runs Sigma, YARA, and
+atomic IOC detection, and writes ECS 9.3.0 NDJSON alerts (non-ECS fields use the `edr.` prefix).
 
 ## Start Here
 
@@ -12,7 +12,7 @@ writes ECS NDJSON alerts.
 
 ## Guides
 
-- [Detection (Sigma + YARA)](detection.md)
+- [Detection (Sigma + YARA + IOC)](detection.md)
 - [Active Response](active-response.md)
 - [Output Format](output.md)
 
@@ -34,3 +34,4 @@ writes ECS NDJSON alerts.
 - Windows only. Administrator privileges are required for ETW.
 - Configuration and rules are resolved from the current working directory. For service mode, use absolute paths or environment overrides.
 - Service mode is supported on Windows. See the CLI Reference for commands.
+- Trusted path allowlisting is shared by default across Response, IOC hash, and YARA (`allowlist.paths`).

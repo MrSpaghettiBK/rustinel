@@ -38,6 +38,7 @@ Rustinel monitors Windows endpoints by:
 - Collecting kernel events via **ETW** (process, network, file, registry, DNS, PowerShell, WMI, services, tasks)
 - Normalizing ETW events into **Sysmon-compatible** fields
 - Detecting threats using **Sigma rules** and **YARA scanning**
+- Detecting **atomic IOCs** (hashes, IP/CIDR, domains, path regex)
 - Writing alerts in **ECS NDJSON** format
 
 ---
@@ -48,10 +49,15 @@ Rustinel monitors Windows endpoints by:
 - **Dual detection engines**:
   - **Sigma** for behavioral detection
   - **YARA** for file scanning on process start
+- **Atomic IOC detection**: hashes, IP/CIDR, domains, path regex
 - **Noise reduction**:
   - keyword filtering at the ETW session
   - router-level filtering for high-volume network events
   - optional network connection aggregation
+- **Hot-path optimizations**:
+  - Sigma rules are filtered at load time (`category`/`product`/`service`)
+  - Sigma conditions are transpiled + precompiled at startup
+  - process-context enrichment is attached on alerts, not every event
 - **Enrichment**:
   - NT → DOS path normalization
   - PE metadata extraction (OriginalFileName/Product/Description)
@@ -181,6 +187,13 @@ sigma_rules_path = "rules/sigma"
 yara_enabled = true
 yara_rules_path = "rules/yara"
 
+[allowlist]
+paths = [
+  "C:\\Windows\\",
+  "C:\\Program Files\\",
+  "C:\\Program Files (x86)\\",
+]
+
 [logging]
 level = "info"
 directory = "logs"
@@ -190,6 +203,7 @@ console_output = true
 [alerts]
 directory = "logs"
 filename = "alerts.json"
+match_debug = "off" # off | summary | full
 
 [response]
 enabled = false
@@ -197,23 +211,42 @@ prevention_enabled = false
 min_severity = "critical"
 channel_capacity = 128
 allowlist_images = []
-allowlist_paths = [
-  "C:\\Windows\\",
-  "C:\\Program Files\\",
-  "C:\\Program Files (x86)\\",
-]
 
 [network]
 aggregation_enabled = true
 aggregation_max_entries = 20000
 aggregation_interval_buffer_size = 50
+
+[ioc]
+enabled = true
+hashes_path = "rules/ioc/hashes.txt"
+ips_path = "rules/ioc/ips.txt"
+domains_path = "rules/ioc/domains.txt"
+paths_regex_path = "rules/ioc/paths_regex.txt"
+default_severity = "high"
+max_file_size_mb = 50
 ```
+
+`allowlist.paths` is shared by default across:
+- `response.allowlist_paths`
+- `ioc.hash_allowlist_paths`
+- `scanner.yara_allowlist_paths`
+
+If a module-specific list is explicitly set, it overrides the shared list for that module only.
+
+Match debug output:
+1. `alerts.match_debug = "off"` disables match details in alerts (default).
+2. `alerts.match_debug = "summary"` adds rule condition + matched fields/patterns.
+3. `alerts.match_debug = "full"` adds matched values and YARA string snippets.
 
 Environment overrides:
 
 ```powershell
 set EDR__LOGGING__LEVEL=debug
 set EDR__SCANNER__SIGMA_RULES_PATH=C:\rules\sigma
+set EDR__ALLOWLIST__PATHS=["C:\\Windows\\","C:\\Program Files\\"]
+# optional module-specific override:
+set EDR__SCANNER__YARA_ALLOWLIST_PATHS=["C:\\Windows\\","D:\\Trusted\\"]
 ```
 
 CLI override (highest precedence, run mode only):
@@ -233,9 +266,22 @@ Note: rule logic evaluation errors are only logged at `warn`, `debug`, or `trace
 | `min_severity` | `critical` | Minimum severity to respond to (Sigma uses rule `level`, YARA is always treated as `critical`) |
 | `channel_capacity` | `128` | Queue size for response tasks (drops on overflow) |
 | `allowlist_images` | `[]` | Image basenames or full paths to skip |
-| `allowlist_paths` | `["C:\\Windows\\", ...]` | Prefix paths to skip (case-insensitive) |
+| `allowlist_paths` | inherits `allowlist.paths` | Prefix paths to skip (case-insensitive). Optional module-specific override |
 
 More details: `docs/active-response.md`.
+
+### Atomic IOC detection
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `true` | Enable atomic IOC detection |
+| `hashes_path` | `rules/ioc/hashes.txt` | Hash IOC file (MD5/SHA1/SHA256) |
+| `ips_path` | `rules/ioc/ips.txt` | IP and CIDR IOC file |
+| `domains_path` | `rules/ioc/domains.txt` | Domain IOC file |
+| `paths_regex_path` | `rules/ioc/paths_regex.txt` | Path/filename regex IOC file |
+| `default_severity` | `high` | Severity assigned to IOC alerts |
+| `max_file_size_mb` | `50` | Skip hashing files larger than this (MB) |
+| `hash_allowlist_paths` | inherits `allowlist.paths` | Prefix paths to skip hashing (case-insensitive). Optional module-specific override |
 
 ---
 
@@ -253,6 +299,18 @@ More details: `docs/active-response.md`.
 * Place `.yar` / `.yara` files under `rules/yara/`
 * Rules compile at startup
 * Scans trigger on **process creation** (runs in a background worker)
+* Files under allowlisted path prefixes are skipped (`allowlist.paths` by default or `scanner.yara_allowlist_paths` override)
+
+### Atomic IOCs
+
+Place indicator files under `rules/ioc/`:
+
+* `hashes.txt` — MD5, SHA1, SHA256 hashes (auto-detected by length)
+* `ips.txt` — IP addresses and CIDR ranges
+* `domains.txt` — exact domains or `*.`/`.` prefix for suffix matching
+* `paths_regex.txt` — case-insensitive regexes matched against file paths
+
+Hash checking runs in a dedicated background worker on process creation. Files under allowlisted paths (shared `allowlist.paths` by default, or `ioc.hash_allowlist_paths` override) and files exceeding `max_file_size_mb` are skipped automatically. Domain, IP, and path checks run inline with negligible overhead.
 
 ---
 
@@ -304,6 +362,7 @@ src/
 ├── normalizer/    # Sysmon-style normalization + enrichment
 ├── engine/        # Sigma engine
 ├── scanner/       # YARA scanning worker
+├── ioc/           # Atomic IOC detection (hashes, IPs, domains, paths)
 ├── state/         # caches (process/sid/dns/aggregation)
 └── bin/validate_rules.rs
 ```

@@ -6,6 +6,7 @@ pub mod alerts;
 pub mod collector;
 pub mod config;
 pub mod engine;
+pub mod ioc;
 pub mod models;
 pub mod normalizer;
 pub mod response;

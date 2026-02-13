@@ -135,6 +135,17 @@ cargo clippy
 
 ## Debugging
 
+### Logging Contract
+
+Use this contract consistently when adding/changing logs:
+
+- `trace`: high-frequency internals (per-event/per-rule/per-field diagnostics).
+- `debug`: actionable troubleshooting (queue drops, retryable worker errors, parse failures worth investigating).
+- `info`: lifecycle + health summaries + positive detections.
+- `warn`/`error`: degraded behavior, failures, or reliability risk.
+
+If a line can fire on most events in normal operation, it belongs in `trace`, not `debug`.
+
 ### Verbose Logging
 
 ```powershell

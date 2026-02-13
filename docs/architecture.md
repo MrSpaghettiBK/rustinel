@@ -20,18 +20,18 @@
 │        (ETW → Sysmon format, path/user enrichment)         │
 └─────────────────────────────────────────────────────────────┘
                               │ Normalized Events
-                    ┌─────────┴─────────┐
-                    ▼                   ▼
-         ┌──────────────────┐  ┌──────────────────┐
-         │   Sigma Engine   │  │   YARA Scanner   │
-         │  (rule matching) │  │ (file scanning)  │
-         └──────────────────┘  └──────────────────┘
-                    │                   │
-                    └─────────┬─────────┘
+                    ┌─────────┼─────────┐
+                    ▼         ▼         ▼
+         ┌────────────┐ ┌──────────┐ ┌──────────────┐
+         │   Sigma    │ │   YARA   │ │  IOC Engine  │
+         │  (rules)   │ │ (files)  │ │ (indicators) │
+         └────────────┘ └──────────┘ └──────────────┘
+                    │         │         │
+                    └─────────┼─────────┘
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                     Alert Sink                              │
-│                  (ECS NDJSON output)                        │
+│               (ECS 9.3.0 NDJSON output)                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,6 +66,7 @@ Converts raw ETW events to Sigma-compatible format.
 - Parent process correlation
 - SID → Domain\User resolution
 - DNS IP → hostname mapping
+- Process context (`Image`, `CommandLine`, parent metadata) is attached lazily on alerts, not on every normalized event
 
 **Event ID Mapping:**
 | ETW Event | Sysmon or Windows ID |
@@ -99,6 +100,9 @@ Thread-safe caches for performance:
 
 **Sigma Engine:**
 - Parses YAML rules with boolean logic
+- Skips unsupported rules at load time (`category`, `product`, `service`)
+- Evaluates only rules in relevant category buckets per event
+- Precompiles condition trees at startup
 - Supports core Sigma modifiers like `contains`, `re`, `cidr`, `base64`, `fieldref`, `windash`
 - Evaluates in real-time per event
 
@@ -106,7 +110,16 @@ Thread-safe caches for performance:
 - Compiles rules at startup
 - Background worker for non-blocking scans
 - Triggers on process creation events
+- Skips allowlisted path prefixes before queueing and in the worker
+
+**IOC Engine:**
+- Matches atomic indicators: hashes (MD5/SHA1/SHA256), IPs/CIDRs, domains (exact + suffix), path regexes
+- Domain, IP, and path checks run inline (negligible overhead with small indicator sets)
+- Hash computation runs in a dedicated `spawn_blocking` worker thread
+- Hash allowlist uses shared `allowlist.paths` by default (or `ioc.hash_allowlist_paths` override)
+- File size limit prevents hashing oversized binaries
+- File identity cache (path + size + mtime) avoids re-hashing unchanged files
 
 ### Alert Sink
 
-Writes detections to NDJSON files in ECS format for SIEM ingestion.
+Writes detections to NDJSON files in ECS 9.3.0 format for SIEM ingestion.
